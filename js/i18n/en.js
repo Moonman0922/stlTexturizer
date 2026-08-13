@@ -106,6 +106,7 @@ export default {
   "excl.compareView": "Compare view ⓘ",
   "excl.compareViewTitle": "Show a second, synced viewport tracing the real CAD face boundaries next to the main one",
   "excl.comparePaneLabel": "STEP CAD faces",
+  "excl.meshPaneLabel": "Mesh",
   "precision.label": "Precision (Beta) ⓘ",
   "precision.labelTitle": "Subdivide mesh in the background so the brush selects at finer granularity",
   "precision.outdated": "⚠ Outdated",

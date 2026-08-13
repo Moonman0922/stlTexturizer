@@ -109,7 +109,20 @@
     <!-- â”€â”€â”€ 3-D Viewport â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
     <section id="viewport-section">
       <div id="viewport-split">
+      <!-- Split-view compare pane (Mode B of the STEP-face AB test, see
+           js/comparisonViewport.js). Hidden unless the loaded model has STEP
+           face data and the user turns on "Compare view". Placed BEFORE the
+           main viewport so it slides in from the left as its own panel
+           rather than shrinking/coopting the main render window — shares
+           the main viewport's camera 1:1, so it always moves in lockstep,
+           and traces the true CAD-face boundaries so it reads as a distinct
+           reference view rather than a second copy of the same picture. -->
+      <div id="compare-pane" class="drop-zone hidden">
+        <canvas id="viewport-compare" role="img" aria-label="STEP CAD-face boundary comparison view"></canvas>
+        <div class="viewport-pane-label step" data-i18n="excl.comparePaneLabel">STEP CAD faces</div>
+      </div>
       <div id="drop-zone" class="drop-zone">
+        <div class="viewport-pane-label mesh hidden" id="mesh-pane-label" data-i18n="excl.meshPaneLabel">Mesh</div>
         <div id="drop-hint" class="drop-hint">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#555" stroke-width="1.2" stroke-linejoin="round"/>
@@ -153,16 +166,6 @@
             <span data-i18n-html="cta.store">Support this tool? Shop at <a href="https://geni.us/CNCStoreTexture" target="_blank" rel="noopener noreferrer">CNCKitchen.STORE</a> or send a tip via <a href="https://www.paypal.me/CNCKitchen" target="_blank" rel="noopener noreferrer">PayPal</a> / <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener noreferrer">Ko-fi</a></span><button id="store-cta-dismiss" aria-label="Dismiss">&times;</button>
           </span>
         </div>
-      </div>
-      <!-- Split-view compare pane (Mode B of the STEP-face AB test, see
-           js/comparisonViewport.js). Hidden unless the loaded model has STEP
-           face data and the user turns on "Compare view" — shares the main
-           viewport's camera 1:1, so it always moves in lockstep, and traces
-           the true CAD-face boundaries so it reads as a distinct reference
-           view rather than a second copy of the same picture. -->
-      <div id="compare-pane" class="drop-zone hidden">
-        <canvas id="viewport-compare" role="img" aria-label="STEP CAD-face boundary comparison view"></canvas>
-        <div class="compare-pane-label" data-i18n="excl.comparePaneLabel">STEP CAD faces</div>
       </div>
       </div>
       <div id="viewport-footer">

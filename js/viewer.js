@@ -32,6 +32,11 @@ let _needsRender = true;
 let _diagEdges = null;       // LineSegments2 for open/non-manifold edges
 let _diagFaces = [];         // Array of THREE.Mesh overlays for face highlights
 let _stepBoundaryLines = null; // LineSegments2 tracing true STEP CAD-face boundaries
+// Third accent color for STEP-face selection (distinct from the mesh
+// exclude/include colors and from generic UI purple) — mirrors --step-accent
+// in style.css; kept in sync with the CSS var by setViewerTheme() below,
+// since a Three.js material color can't read a CSS custom property directly.
+let _stepAccentColor = 0x22d3d0;
 let _secondaryRenderFn = null; // set by comparisonViewport.js when split-view compare is on
 
 // Turntable pitch clamp: keep the view direction at least this far (radians)
@@ -743,8 +748,17 @@ export function setViewerTheme(isLight) {
   grid.rotation.x = Math.PI / 2;
   grid.position.z = savedZ;
   scene.add(grid);
+
+  // Keep the STEP accent in sync with --step-accent (light/dark values from
+  // style.css) — a Three.js material can't read the CSS var itself.
+  _stepAccentColor = isLight ? 0x0e8f8c : 0x22d3d0;
+  if (_stepBoundaryLines) _stepBoundaryLines.material.color.set(_stepAccentColor);
+
   requestRender();
 }
+
+/** The current theme's STEP-face accent color (see --step-accent in style.css). */
+export function getStepAccentColor() { return _stepAccentColor; }
 
 /**
  * Replace (or clear) the flat orange exclusion overlay mesh.
@@ -937,9 +951,9 @@ export function setDiagEdges(positions, color = 0xff0000) {
  * (e.g. on model unload, or when the loaded model has no STEP face data).
  *
  * @param {Float32Array|null} positions  pairs of 3D points (6 floats per edge)
- * @param {number} color
+ * @param {number} [color]  defaults to the current theme's STEP accent
  */
-export function setStepFaceBoundaryEdges(positions, color = 0x39d0ff) {
+export function setStepFaceBoundaryEdges(positions, color = _stepAccentColor) {
   if (_stepBoundaryLines) {
     scene.remove(_stepBoundaryLines);
     _stepBoundaryLines.geometry.dispose();

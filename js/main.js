@@ -9,7 +9,7 @@ import { initViewer, loadGeometry, setMeshMaterial, setMeshGeometry, setWirefram
          setExclusionOverlay, setHoverPreview, setViewerTheme,
          setProjection, requestRender,
          clearDiagOverlays, setDiagEdges, addDiagFaces,
-         setStepFaceBoundaryEdges,
+         setStepFaceBoundaryEdges, getStepAccentColor,
          setRotationGizmo, isGizmoDragging } from './viewer.js';
 import { initComparisonViewport, setComparisonActive } from './comparisonViewport.js';
 import { loadModelFile, computeBounds, getTriangleCount }  from './stlLoader.js';
@@ -76,6 +76,7 @@ let isPainting         = false;
 let selectionMode      = false;       // false = exclude painted faces; true = include only painted faces
 let maskModeChosen     = false;       // false until the user (or a loaded/seeded mask) engages surface masking — neither mode button is highlighted
 let _lastHoverTriIdx   = -1;          // last triangle index used for hover preview
+let _lastCompareHoverTriIdx = -1;     // same, but for the compare-pane's independent hover (separate cache so switching panes can't skip a redraw by matching the other pane's last index)
 let placeOnFaceActive  = false;       // true while "Place on Face" mode is active
 let rotateActive       = false;       // true while rotate mode is active
 let rotateAngles       = { x: 0, y: 0, z: 0 };  // accumulated rotation in degrees
@@ -417,6 +418,7 @@ const compareViewRow      = document.getElementById('compare-view-row');
 const compareViewToggle   = document.getElementById('compare-view-toggle');
 const comparePane         = document.getElementById('compare-pane');
 const compareCanvas       = document.getElementById('viewport-compare');
+const meshPaneLabel       = document.getElementById('mesh-pane-label');
 
 // ── Precision masking DOM refs ────────────────────────────────────────────────
 const precisionMaskingRow     = document.getElementById('precision-masking-row');
@@ -1965,6 +1967,54 @@ function wireEvents() {
     brushCursorEl.style.display = 'none';
   });
 
+  // ── Compare pane (STEP side) — independent CAD-face picking ──────────────
+  // Always live while Compare view is on, regardless of whatever tool/basis
+  // is active on the primary canvas — that's the point of the split view:
+  // paint mesh triangles on one side, pick whole CAD faces on the other, at
+  // the same time. Reuses pickTriangle()/getFrontFaceHit() against the
+  // shared camera (comparisonViewport.js renders through that same camera
+  // object), just pointed at this canvas's own bounding rect.
+  compareCanvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || precisionBusy) return;
+    if (!compareViewEnabled || !stepFaceData || !stepFaceIndex || !currentGeometry) return;
+    e.preventDefault();
+    const triIdx = pickTriangle(e, compareCanvas);
+    if (triIdx < 0) return;
+    const filled = triSetForFaceAt(triIdx, stepFaceData.faceOfTri, stepFaceIndex);
+    const erase = e.shiftKey;
+    for (const t of filled) {
+      if (erase) excludedFaces.delete(t); else excludedFaces.add(t);
+    }
+    if (precisionMaskingEnabled && precisionParentMap) {
+      const len = precisionParentMap.length;
+      for (let i = 0; i < len; i++) {
+        if (filled.has(precisionParentMap[i])) {
+          if (erase) precisionExcludedFaces.delete(i); else precisionExcludedFaces.add(i);
+        }
+      }
+    }
+    refreshExclusionOverlay();
+    _lastCompareHoverTriIdx = -1;
+  });
+
+  let _pendingCompareHoverEvent = null;
+  let _compareHoverRafId = 0;
+  compareCanvas.addEventListener('mousemove', (e) => {
+    _pendingCompareHoverEvent = e;
+    if (!_compareHoverRafId) {
+      _compareHoverRafId = requestAnimationFrame(() => {
+        _compareHoverRafId = 0;
+        if (_pendingCompareHoverEvent) updateCompareHover(_pendingCompareHoverEvent);
+        _pendingCompareHoverEvent = null;
+      });
+    }
+  });
+
+  compareCanvas.addEventListener('mouseleave', () => {
+    _lastCompareHoverTriIdx = -1;
+    setHoverPreview(null);
+  });
+
   document.addEventListener('mouseup', () => {
     if (!isPainting) return;
     isPainting = false;
@@ -2072,6 +2122,7 @@ function setCompareViewEnabled(enabled) {
   compareViewEnabled = enabled;
   compareViewToggle.checked = enabled;
   comparePane.classList.toggle('hidden', !enabled);
+  meshPaneLabel.classList.toggle('hidden', !enabled);
   setComparisonActive(enabled);
   if (enabled && stepFaceData) {
     // Cached on first use — tracing every CAD-face boundary is an O(triCount)
@@ -2142,8 +2193,8 @@ function setExclusionTool(tool) {
 }
 
 const _ndcResult = new THREE.Vector2();
-function _canvasNDC(e) {
-  const rect = canvas.getBoundingClientRect();
+function _canvasNDC(e, canvasEl = canvas) {
+  const rect = canvasEl.getBoundingClientRect();
   _ndcResult.set(
     ((e.clientX - rect.left) / rect.width)  *  2 - 1,
     ((e.clientY - rect.top)  / rect.height) * -2 + 1,
@@ -2166,10 +2217,10 @@ function getFrontFaceHit(hits, mesh) {
   return hits[0]; // fallback — should not happen with a closed mesh
 }
 
-function pickTriangle(e) {
+function pickTriangle(e, canvasEl = canvas) {
   const mesh = getCurrentMesh();
   if (!mesh) return -1;
-  _raycaster.setFromCamera(_canvasNDC(e), getCamera());
+  _raycaster.setFromCamera(_canvasNDC(e, canvasEl), getCamera());
   const hits = _raycaster.intersectObject(mesh);
   const hit = getFrontFaceHit(hits, mesh);
   if (!hit) return -1;
@@ -2955,6 +3006,10 @@ function updateStepFaceHover(e) {
     return;
   }
   const hovered = triSetForFaceAt(triIdx, stepFaceData.faceOfTri, stepFaceIndex);
+  // STEP-face hover uses the third accent color instead of the generic mesh
+  // hover yellow, so hovering a CAD face reads as visually distinct from
+  // hovering mesh triangles.
+  const hoverColor = eraseMode ? 0x999999 : getStepAccentColor();
   const usePrecision = precisionMaskingEnabled && precisionGeometry && precisionParentMap;
   if (usePrecision) {
     const refinedHover = new Set();
@@ -2962,12 +3017,44 @@ function updateStepFaceHover(e) {
     for (let i = 0; i < len; i++) {
       if (hovered.has(precisionParentMap[i])) refinedHover.add(i);
     }
-    setHoverPreview(buildExclusionOverlayGeo(precisionGeometry, refinedHover), eraseMode ? 0x999999 : 0xffee00);
+    setHoverPreview(buildExclusionOverlayGeo(precisionGeometry, refinedHover), hoverColor);
   } else {
-    setHoverPreview(buildExclusionOverlayGeo(currentGeometry, hovered), eraseMode ? 0x999999 : 0xffee00);
+    setHoverPreview(buildExclusionOverlayGeo(currentGeometry, hovered), hoverColor);
   }
   if (stepFaceStatus) {
     stepFaceStatus.textContent = describeFace(stepFaceData.faceOfTri[triIdx], stepFaceData.faces);
+  }
+}
+
+// Hover preview for the compare pane's independent CAD-face picking (see the
+// compareCanvas listeners above). Same shape as updateStepFaceHover but
+// against the compare canvas's own rect and its own hover-index cache, and
+// checks live e.shiftKey rather than the primary tool's eraseMode toggle —
+// the compare pane has no tool of its own for that global to track.
+function updateCompareHover(e) {
+  if (!compareViewEnabled || !stepFaceData || !stepFaceIndex || !currentGeometry) {
+    setHoverPreview(null);
+    return;
+  }
+  const triIdx = pickTriangle(e, compareCanvas);
+  if (triIdx === _lastCompareHoverTriIdx) return;
+  _lastCompareHoverTriIdx = triIdx;
+  if (triIdx < 0) {
+    setHoverPreview(null);
+    return;
+  }
+  const hovered = triSetForFaceAt(triIdx, stepFaceData.faceOfTri, stepFaceIndex);
+  const hoverColor = e.shiftKey ? 0x999999 : getStepAccentColor();
+  const usePrecision = precisionMaskingEnabled && precisionGeometry && precisionParentMap;
+  if (usePrecision) {
+    const refinedHover = new Set();
+    const len = precisionParentMap.length;
+    for (let i = 0; i < len; i++) {
+      if (hovered.has(precisionParentMap[i])) refinedHover.add(i);
+    }
+    setHoverPreview(buildExclusionOverlayGeo(precisionGeometry, refinedHover), hoverColor);
+  } else {
+    setHoverPreview(buildExclusionOverlayGeo(currentGeometry, hovered), hoverColor);
   }
 }
 
