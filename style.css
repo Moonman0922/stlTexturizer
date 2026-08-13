@@ -13,6 +13,12 @@
   --border:       #2e2e38;
   --accent:       #7c6aff;
   --accent-hover: #9b8dff;
+  /* Third, distinct accent for STEP CAD-face selection (see excl-basis-step,
+     the compare-pane's STEP label, and its hover/boundary-line colors in
+     viewer.js) — kept clearly apart from --accent (mesh/general UI), and
+     from --success/--danger so it never reads as a status colour. */
+  --step-accent:       #22d3d0;
+  --step-accent-hover: #4de0dd;
   --text:         #e0e0e8;
   --text-muted:   #888899;
   --danger:       #ff5f5f;
@@ -29,6 +35,8 @@
   --border:       #d0d0df;
   --accent:       #6355e0;
   --accent-hover: #7c6aff;
+  --step-accent:       #0e8f8c;
+  --step-accent-hover: #12a7a3;
   --text:         #1a1a2e;
   --text-muted:   #66667a;
   --danger:       #d93025;
@@ -212,8 +220,11 @@ main {
 }
 
 /* #compare-pane also carries the .drop-zone class for its base
-   flex/position/overflow — this rule only adds the divider border. */
-#compare-pane {
+   flex/position/overflow. The divider border goes on whichever pane is
+   SECOND in DOM order (the adjacent-sibling combinator, not a specific id)
+   so the compare pane can sit on either side of the main viewport without
+   this rule needing to change. */
+#viewport-split > .drop-zone + .drop-zone {
   border-left: 1px solid var(--border);
 }
 
@@ -227,7 +238,7 @@ main {
   inset: 0;
 }
 
-.compare-pane-label {
+.viewport-pane-label {
   position: absolute;
   top: 8px;
   left: 8px;
@@ -236,11 +247,23 @@ main {
   font-weight: 600;
   letter-spacing: .03em;
   text-transform: uppercase;
-  color: var(--text-muted);
   background: color-mix(in srgb, var(--surface) 85%, transparent);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   pointer-events: none;
+}
+.viewport-pane-label.hidden { display: none; }
+
+/* Mesh uses the app's existing accent; STEP gets its own distinct accent
+   (see --step-accent) so the two panes read as different modes at a glance,
+   not just different labels. */
+.viewport-pane-label.mesh {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.viewport-pane-label.step {
+  color: var(--step-accent);
+  border-color: var(--step-accent);
 }
 
 .drop-zone {
@@ -1305,6 +1328,15 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
   background: color-mix(in srgb, #00cc66 18%, var(--surface2));
   border-color: #00cc66;
   color: #00cc66;
+}
+
+/* STEP Face basis gets its own accent (distinct from Mesh's plain --accent
+   highlight) so the two selection bases read as different modes, not just
+   different labels. */
+#excl-basis-step.active {
+  background: color-mix(in srgb, var(--step-accent) 18%, var(--surface2));
+  border-color: var(--step-accent);
+  color: var(--step-accent);
 }
 
 .excl-seg-btn:hover:not(.active) {
