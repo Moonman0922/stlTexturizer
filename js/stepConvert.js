@@ -48,6 +48,13 @@ export function resolveStepSettings(auto, settings) {
  * Expand meshStep's indexed result (Float64 positions + per-vertex analytic
  * normals) into the non-indexed Float32 triangle soup (9 floats per triangle)
  * that the whole texturizer pipeline is built around.
+ *
+ * meshStep also reports `faceOfTri`/`solidOfTri`: the source STEP B-rep face
+ * (and body) that produced each triangle. Those arrays are already one entry
+ * per triangle (not per vertex), so indexing them is a straight pass-through
+ * — no soup expansion needed, they line up with soupPos/soupNrm triangle for
+ * triangle. This is the link that lets the app later select a whole CAD
+ * surface instead of painting triangles by hand.
  */
 export function stepResultToSoup(r) {
   const idx      = r.mesh.indices;
@@ -67,7 +74,13 @@ export function stepResultToSoup(r) {
       soupNrm[o + 2] = nrm[v + 2];
     }
   }
-  return { positions: soupPos, normals: soupNrm, triCount };
+  return {
+    positions: soupPos,
+    normals: soupNrm,
+    triCount,
+    faceOfTri:  r.faceOfTri  || null,
+    solidOfTri: r.solidOfTri || null,
+  };
 }
 
 /** Structured-clone-safe subset of meshStep's ImportDiagnostics. */

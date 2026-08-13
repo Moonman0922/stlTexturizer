@@ -200,6 +200,49 @@ main {
   overflow: hidden;
 }
 
+/* Split-view compare pane (Mode B of the STEP-face AB test). Wraps the
+   existing .drop-zone so it keeps behaving exactly as before when the
+   compare pane is hidden — flex:1 alone fills the row, same as it filled
+   the column before this wrapper existed. */
+#viewport-split {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* #compare-pane also carries the .drop-zone class for its base
+   flex/position/overflow — this rule only adds the divider border. */
+#compare-pane {
+  border-left: 1px solid var(--border);
+}
+
+#compare-pane.hidden { display: none; }
+
+#viewport-compare {
+  display: block;
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+.compare-pane-label {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+
 .drop-zone {
   flex: 1 1 0;
   position: relative;
@@ -1181,6 +1224,7 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
   gap: 6px;
   margin-bottom: 10px;
 }
+.excl-tools.hidden { display: none; }
 
 .excl-mode-row {
   margin-bottom: 10px;
@@ -1266,6 +1310,14 @@ input[type="number"].val:focus { outline: none; border-color: var(--accent); }
 .excl-seg-btn:hover:not(.active) {
   background: var(--border);
   color: var(--text);
+}
+
+.excl-mode-row.hidden { display: none; }
+.excl-hint.hidden { display: none; }
+.excl-hint {
+  margin: 0 0 10px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 /* Footer row: count + clear */

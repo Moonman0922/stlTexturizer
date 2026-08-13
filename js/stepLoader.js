@@ -128,14 +128,35 @@ export async function loadSTEPText(text, { settings = { preset: 'standard' }, on
   if (result.normals) {
     geometry.setAttribute('normal', new THREE.BufferAttribute(result.normals, 3));
   }
-  const { nanCount, degenerateCount, originOffset } = setupGeometry(geometry);
+
+  // faceOfTri/solidOfTri are one entry per triangle, in the same order as the
+  // soup — pass them through setupGeometry's clean-up pass as companion
+  // arrays so a NaN/degenerate triangle getting dropped can't desync them
+  // from the geometry. CAD-face selection depends on that alignment holding.
+  const companionArrays = [];
+  if (result.faceOfTri)  companionArrays.push(result.faceOfTri);
+  if (result.solidOfTri) companionArrays.push(result.solidOfTri);
+  const { nanCount, degenerateCount, originOffset } = setupGeometry(geometry, companionArrays);
   const bounds = computeBounds(geometry);
+
+  // Trim the companion arrays down to the surviving triangle count (setupGeometry
+  // only compacts their live prefix in place; stale entries can remain past it).
+  const triCount = geometry.attributes.position.count / 3;
+  const faceOfTri  = result.faceOfTri  ? result.faceOfTri.slice(0, triCount)  : null;
+  const solidOfTri = result.solidOfTri ? result.solidOfTri.slice(0, triCount) : null;
 
   return {
     geometry, bounds, nanCount, degenerateCount, originOffset,
     step: {
       units: result.units,
       diagnostics: result.diagnostics,
+      // CAD-face selection data (see js/stepFaceSelection.js). Null when the
+      // worker couldn't report it (older meshStep version) — callers must
+      // treat a missing faceOfTri as "STEP-face selection unavailable" and
+      // fall back to plain mesh-triangle masking.
+      faceOfTri,
+      solidOfTri,
+      faces: result.faces || null,
     },
   };
 }

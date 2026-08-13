@@ -32,3 +32,34 @@ decimation/bottom-snap folds; the cross-module grid differences above are a
 suspected contributor. If unifying grids is ever attempted, it is a
 behaviour change — verify with the export→import round-trip, not the
 in-memory mesh.
+
+## STEP CAD-face selection (`js/stepFaceSelection.js`)
+
+For STL/OBJ/3MF the app only ever sees a triangle soup — there is no such
+thing as "a surface", only triangles and the dihedral angle between them
+(`exclusion.js`'s `bucketFill`/brush tools). STEP is different: `meshStep`
+(the B-rep tessellator behind `js/stepLoader.js`) tessellates a real CAD
+model, and `importStep()` already reports, for free, which STEP entity
+(`faceOfTri`) and which analytic surface (`faces`: type, area, mean normal)
+each triangle came from. `js/stepFaceSelection.js` turns that into "click
+once to select the whole CAD face" instead of a dihedral-angle flood fill —
+exact, no threshold, immune to how finely the face got tessellated.
+
+That per-triangle lineage is fragile in two specific ways, both handled
+deliberately rather than by accident:
+
+- **Triangle-cleanup alignment.** `stlLoader.js`'s `validateAndCleanGeometry`
+  compacts out NaN/degenerate triangles in place. If `faceOfTri` weren't
+  compacted through the *exact same* keep/drop decisions, a dropped triangle
+  would silently desync every id after it from the geometry. `setupGeometry`
+  takes `faceOfTri`/`solidOfTri` as optional `companionArrays` for this
+  reason — see `stepLoader.js`'s `loadSTEPText`.
+- **Mesh re-authoring.** Subdivision/decimation/displacement baking produce
+  a triangle set `faceOfTri` no longer describes at all. CAD-face selection
+  only ever needs to be valid on the *freshly loaded, pre-subdivision* mesh
+  (`currentGeometry` in `main.js`, before export-time processing) — exactly
+  where `excludedFaces` (the manual-painting selection) already lives, since
+  a picked CAD face is converted straight into that same triangle-index Set
+  and rides the rest of the masking pipeline unchanged. `main.js` nulls
+  `stepFaceData`/`stepFaceIndex` on every model load and again in
+  `adoptBakedGeometry` so a stale mapping can never get picked against.

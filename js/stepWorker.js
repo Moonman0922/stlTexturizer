@@ -46,9 +46,10 @@ self.onmessage = (e) => {
   if (msg.cmd !== 'run') return;
   try {
     const result = run(msg.text, msg.settings);
-    const transfer = result.normals
-      ? [result.positions.buffer, result.normals.buffer]
-      : [result.positions.buffer];
+    const transfer = [result.positions.buffer];
+    if (result.normals)    transfer.push(result.normals.buffer);
+    if (result.faceOfTri)  transfer.push(result.faceOfTri.buffer);
+    if (result.solidOfTri) transfer.push(result.solidOfTri.buffer);
     self.postMessage({ type: 'done', result }, transfer);
   } catch (err) {
     self.postMessage({ type: 'error', message: (err && err.message) || String(err) });
@@ -83,10 +84,18 @@ function run(text, settings) {
 
   const soup = stepResultToSoup(r);
   return {
-    positions: soup.positions,
-    normals:   soup.normals,
-    triCount:  soup.triCount,
-    units:     r.units,
+    positions:  soup.positions,
+    normals:    soup.normals,
+    triCount:   soup.triCount,
+    // One B-rep face/body id per triangle, aligned with positions/normals —
+    // lets the app select a whole CAD surface instead of painting triangles.
+    faceOfTri:  soup.faceOfTri,
+    solidOfTri: soup.solidOfTri,
+    // Per-face metadata (surface type, area, mean normal) keyed by the ids in
+    // faceOfTri. r.faces holds only plain data (numbers/strings/{x,y,z}
+    // objects) so it survives the structured-clone postMessage boundary as-is.
+    faces:      r.faces || null,
+    units:      r.units,
     diagnostics: summarizeDiagnostics(r.diagnostics),
   };
 }
