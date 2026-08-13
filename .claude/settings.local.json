@@ -59,7 +59,8 @@
       "Bash(node --max-old-space-size=8192 test-laserplate.mjs)",
       "Bash(node --max-old-space-size=8192 bench-tri-estimate.mjs)",
       "Bash(node --max-old-space-size=8192 bench-sim-timing.mjs)",
-      "Bash(node --max-old-space-size=8192 -e ' *)"
+      "Bash(node --max-old-space-size=8192 -e ' *)",
+      "mcp__Claude_Code_Remote__add_repo"
     ]
   }
 }
