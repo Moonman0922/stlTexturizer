@@ -9,7 +9,9 @@ import { initViewer, loadGeometry, setMeshMaterial, setMeshGeometry, setWirefram
          setExclusionOverlay, setHoverPreview, setViewerTheme,
          setProjection, requestRender,
          clearDiagOverlays, setDiagEdges, addDiagFaces,
+         setStepFaceBoundaryEdges,
          setRotationGizmo, isGizmoDragging } from './viewer.js';
+import { initComparisonViewport, setComparisonActive } from './comparisonViewport.js';
 import { loadModelFile, computeBounds, getTriangleCount }  from './stlLoader.js';
 import { estimateStep } from './stepLoader.js';
 import { resolveStepSettings } from './stepConvert.js';
@@ -22,6 +24,8 @@ import { runExportPipeline }  from './exportPipeline.js';
 import { exportSTL, export3MF } from './exporter.js';
 import { buildAdjacency, bucketFill,
          buildExclusionOverlayGeo, buildFaceWeights } from './exclusion.js';
+import { buildFaceIndex, triSetForFaceAt, describeFace,
+         buildFaceBoundaryEdges } from './stepFaceSelection.js';
 import { runFastDiagnostics, runExpensiveDiagnostics,
          getEdgePositions, getShellAssignments } from './meshValidation.js';
 import { t, tHtml, initLang, setLang, getLang, applyTranslations, TRANSLATIONS } from './i18n.js';
@@ -63,7 +67,7 @@ let excludedFaces      = new Set();   // triangle indices in currentGeometry
 let triangleAdjacency  = null;        // Array from buildAdjacency
 let triangleCentroids  = null;        // Float32Array from buildAdjacency
 let triangleFaceNormals = null;       // Float32Array — local-space unit face normal per tri
-let exclusionTool      = null;        // 'brush' | 'bucket' | null
+let exclusionTool      = null;        // 'brush' | 'bucket' | 'stepFace' | null
 let eraseMode          = false;
 let brushIsRadius      = false;
 let brushRadius        = 5.0;
@@ -82,6 +86,17 @@ let _shiftLineMesh     = null;        // THREE.Line — preview line from last p
 let _lastEffectiveTexture = null;
 let _effectiveMapCache    = null;
 let _effectiveMapCacheKey = null;
+
+// ── STEP CAD-face selection state ─────────────────────────────────────────────
+// Populated only when the loaded model is a .step/.stp file whose meshStep
+// tessellation reported faceOfTri (see js/stepLoader.js, js/stepFaceSelection.js).
+// null for every other source format, and null again once the mesh is
+// re-authored by baking (subdivision/displacement produce a different
+// triangle set that faceOfTri no longer describes).
+let stepFaceData       = null;   // { faceOfTri: Uint32Array, faces: Map<id, FaceInfo> } | null
+let stepFaceIndex      = null;   // Map<faceId, Set<triIdx>> from buildFaceIndex(), or null
+let selectionBasis      = 'mesh'; // 'mesh' | 'step' — which picking method the exclusion tools use
+let compareViewEnabled  = false;  // split-view "AB test" pane on/off
 
 const settings = {
   mappingMode:   5,     // Triplanar default
@@ -373,6 +388,7 @@ const harvestTolRow          = document.getElementById('harvest-tol-row');
 const preserveUntexturedChk  = document.getElementById('preserve-untextured-chk');
 
 // ── Exclusion panel DOM refs ──────────────────────────────────────────────────
+const exclToolsRow        = document.getElementById('excl-tools-row');
 const exclBrushBtn        = document.getElementById('excl-brush-btn');
 const exclBucketBtn       = document.getElementById('excl-bucket-btn');
 const exclBrushTypeRow    = document.getElementById('excl-brush-type-row');
@@ -390,6 +406,17 @@ const exclModeExcludeBtn  = document.getElementById('excl-mode-exclude');
 const exclModeIncludeBtn  = document.getElementById('excl-mode-include');
 const exclSectionHeading  = document.getElementById('excl-section-heading');
 const exclHint            = document.getElementById('excl-hint');
+
+// ── STEP CAD-face selection DOM refs ──────────────────────────────────────────
+// Only shown once a loaded STEP file reports faceOfTri (see stepFaceData).
+const exclBasisRow        = document.getElementById('excl-basis-row');
+const exclBasisMeshBtn    = document.getElementById('excl-basis-mesh');
+const exclBasisStepBtn    = document.getElementById('excl-basis-step');
+const stepFaceStatus      = document.getElementById('excl-step-face-status');
+const compareViewRow      = document.getElementById('compare-view-row');
+const compareViewToggle   = document.getElementById('compare-view-toggle');
+const comparePane         = document.getElementById('compare-pane');
+const compareCanvas       = document.getElementById('viewport-compare');
 
 // ── Precision masking DOM refs ────────────────────────────────────────────────
 const precisionMaskingRow     = document.getElementById('precision-masking-row');
@@ -984,6 +1011,7 @@ document.getElementById('app-version').textContent = `v${APP_VERSION}`;
 console.info(`BumpMesh v${APP_VERSION}`);
 
 initViewer(canvas);
+initComparisonViewport(compareCanvas);
 
 // Apply saved theme to 3D viewport on startup
 setViewerTheme(document.documentElement.getAttribute('data-theme') === 'light');
@@ -1783,13 +1811,20 @@ function wireEvents() {
     maskModeChosen = true;
     setSelectionMode(false);   // early-returns if already exclude…
     updateMaskModeButtons();   // …so refresh the highlight explicitly
-    if (!exclusionTool) setExclusionTool('bucket');
+    if (!exclusionTool) setExclusionTool(selectionBasis === 'step' ? 'stepFace' : 'bucket');
   });
   exclModeIncludeBtn.addEventListener('click', () => {
     maskModeChosen = true;
     setSelectionMode(true);
     updateMaskModeButtons();
-    if (!exclusionTool) setExclusionTool('bucket');
+    if (!exclusionTool) setExclusionTool(selectionBasis === 'step' ? 'stepFace' : 'bucket');
+  });
+
+  // ── STEP CAD-face selection wiring (AB-test Mode A + Mode B) ──────────────
+  exclBasisMeshBtn.addEventListener('click', () => setSelectionBasis('mesh'));
+  exclBasisStepBtn.addEventListener('click', () => setSelectionBasis('step'));
+  compareViewToggle.addEventListener('change', () => {
+    setCompareViewEnabled(compareViewToggle.checked);
   });
 
   // ── Precision masking wiring ──────────────────────────────────────────────
@@ -1832,6 +1867,31 @@ function wireEvents() {
           if (eraseMode) excludedFaces.delete(t); else excludedFaces.add(t);
         }
         // If precision is active, also sync to precisionExcludedFaces
+        if (precisionMaskingEnabled && precisionParentMap) {
+          const len = precisionParentMap.length;
+          for (let i = 0; i < len; i++) {
+            if (filled.has(precisionParentMap[i])) {
+              if (eraseMode) precisionExcludedFaces.delete(i); else precisionExcludedFaces.add(i);
+            }
+          }
+        }
+        refreshExclusionOverlay();
+        _lastHoverTriIdx = -1;
+        setHoverPreview(null);
+      }
+    } else if (exclusionTool === 'stepFace') {
+      e.preventDefault();
+      _lastHoverTriIdx = -1;
+      setHoverPreview(null);
+      updateMaskingTriDebug(e);
+      const triIdx = pickTriangle(e);
+      if (triIdx >= 0 && stepFaceData && stepFaceIndex) {
+        // A CAD face has an exact boundary — no threshold walk needed, the
+        // whole face is the click target.
+        const filled = triSetForFaceAt(triIdx, stepFaceData.faceOfTri, stepFaceIndex);
+        for (const t of filled) {
+          if (eraseMode) excludedFaces.delete(t); else excludedFaces.add(t);
+        }
         if (precisionMaskingEnabled && precisionParentMap) {
           const len = precisionParentMap.length;
           for (let i = 0; i < len; i++) {
@@ -1892,6 +1952,8 @@ function wireEvents() {
           _updateShiftLinePreview(ev);
         } else if (exclusionTool === 'bucket' && !isPainting && currentGeometry) {
           updateBucketHover(ev);
+        } else if (exclusionTool === 'stepFace' && !isPainting && currentGeometry) {
+          updateStepFaceHover(ev);
         }
       });
     }
@@ -1962,6 +2024,65 @@ function updateMaskModeButtons() {
   exclModeIncludeBtn.classList.toggle('active', includeOn);
   exclModeExcludeBtn.setAttribute('aria-pressed', String(excludeOn));
   exclModeIncludeBtn.setAttribute('aria-pressed', String(includeOn));
+}
+
+// ── STEP CAD-face selection basis (Mode A of the AB-test toggle) ─────────────
+// Switches what a click in the viewport selects: whole triangles via the
+// brush/fill tools ('mesh', the only option for non-STEP models), or a whole
+// analytic CAD face via stepFaceData ('step', only offered once a loaded
+// STEP file reported faceOfTri). Both write into the same excludedFaces set
+// — this only changes what one click adds to it and how the tool row looks.
+function setSelectionBasis(basis, { force = false } = {}) {
+  if (basis === 'step' && !stepFaceData) return;
+  if (!force && selectionBasis === basis) return;
+  selectionBasis = basis;
+  exclBasisMeshBtn.classList.toggle('active', basis === 'mesh');
+  exclBasisStepBtn.classList.toggle('active', basis === 'step');
+  exclBasisMeshBtn.setAttribute('aria-pressed', String(basis === 'mesh'));
+  exclBasisStepBtn.setAttribute('aria-pressed', String(basis === 'step'));
+  exclToolsRow.classList.toggle('hidden', basis === 'step');
+  stepFaceStatus.classList.toggle('hidden', basis !== 'step');
+  if (basis === 'step') {
+    stepFaceStatus.textContent = t('excl.stepFaceHint');
+    if (exclusionTool !== 'stepFace') setExclusionTool('stepFace');
+  } else if (exclusionTool === 'stepFace') {
+    setExclusionTool(null);
+  }
+}
+
+/**
+ * Show/hide the whole CAD-face-selection UI (basis toggle + compare-view
+ * toggle) based on whether the current model has STEP face data, and fall
+ * back to plain mesh selection when it doesn't (freshly loaded non-STEP
+ * model, or a STEP model's mesh got re-authored by baking).
+ */
+function updateStepFaceUIVisibility() {
+  const available = !!stepFaceData;
+  exclBasisRow.classList.toggle('hidden', !available);
+  compareViewRow.classList.toggle('hidden', !available);
+  if (!available) {
+    if (selectionBasis === 'step') setSelectionBasis('mesh');
+    if (compareViewEnabled) setCompareViewEnabled(false);
+  }
+}
+
+/** Turn the split-view comparison pane (Mode B) on/off. */
+function setCompareViewEnabled(enabled) {
+  enabled = enabled && !!stepFaceData;
+  compareViewEnabled = enabled;
+  compareViewToggle.checked = enabled;
+  comparePane.classList.toggle('hidden', !enabled);
+  setComparisonActive(enabled);
+  if (enabled && stepFaceData) {
+    // Cached on first use — tracing every CAD-face boundary is an O(triCount)
+    // pass, not worth repeating on every toggle if the user flips it a few times.
+    if (!stepFaceData.boundaryEdges) {
+      stepFaceData.boundaryEdges = buildFaceBoundaryEdges(currentGeometry, stepFaceData.faceOfTri);
+    }
+    setStepFaceBoundaryEdges(stepFaceData.boundaryEdges);
+  } else {
+    setStepFaceBoundaryEdges(null);
+  }
 }
 
 function setExclusionTool(tool) {
@@ -2824,6 +2945,32 @@ function updateBucketHover(e) {
   }
 }
 
+function updateStepFaceHover(e) {
+  const triIdx = pickTriangle(e);
+  if (triIdx === _lastHoverTriIdx) return;
+  _lastHoverTriIdx = triIdx;
+  if (triIdx < 0 || !stepFaceData || !stepFaceIndex) {
+    setHoverPreview(null);
+    if (stepFaceStatus) stepFaceStatus.textContent = t('excl.stepFaceHint');
+    return;
+  }
+  const hovered = triSetForFaceAt(triIdx, stepFaceData.faceOfTri, stepFaceIndex);
+  const usePrecision = precisionMaskingEnabled && precisionGeometry && precisionParentMap;
+  if (usePrecision) {
+    const refinedHover = new Set();
+    const len = precisionParentMap.length;
+    for (let i = 0; i < len; i++) {
+      if (hovered.has(precisionParentMap[i])) refinedHover.add(i);
+    }
+    setHoverPreview(buildExclusionOverlayGeo(precisionGeometry, refinedHover), eraseMode ? 0x999999 : 0xffee00);
+  } else {
+    setHoverPreview(buildExclusionOverlayGeo(currentGeometry, hovered), eraseMode ? 0x999999 : 0xffee00);
+  }
+  if (stepFaceStatus) {
+    stepFaceStatus.textContent = describeFace(stepFaceData.faceOfTri[triIdx], stepFaceData.faces);
+  }
+}
+
 // ── Slider helper ─────────────────────────────────────────────────────────────
 
 const INPUT_WHEEL_DECIMALS = 3;
@@ -3237,6 +3384,22 @@ async function handleModelFile(file, stepSettings = null) {
     triangleCentroids = adjData.centroids;
     triangleFaceNormals = adjData.faceNormals;
     updateMeshDiagnostics(adjData, currentGeometry.attributes.position.count / 3);
+
+    // STEP CAD-face selection: only available when this load reported
+    // faceOfTri (a STEP file meshStep could tessellate with face lineage
+    // intact). Reset first so a STEP -> STL swap can't leave stale data
+    // pointing at a triangle count that no longer exists — and always drop
+    // any compare-view pane/boundary lines from the previous model, even if
+    // the new one is STEP too (they'd otherwise point at the old geometry).
+    stepFaceData  = null;
+    stepFaceIndex = null;
+    setCompareViewEnabled(false);
+    if (step && step.faceOfTri) {
+      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces };
+      stepFaceIndex = buildFaceIndex(step.faceOfTri);
+    }
+    setSelectionBasis('mesh', { force: true });
+    updateStepFaceUIVisibility();
 
     // Carry scale, offset, rotation, and all other tuning across model swaps —
     // they're normalized to the bounding box so they apply meaningfully to the
@@ -5176,6 +5339,15 @@ function adoptBakedGeometry(geometry, bounds, opts = {}) {
   currentBounds   = bounds;
   currentStlName  = `${currentStlName}_baked`;
   checkAmplitudeWarning();
+
+  // Baking (subdivision/decimation/displacement) re-authors the triangle set
+  // entirely, so any STEP faceOfTri lineage no longer lines up with it —
+  // CAD-face selection has to go back to unavailable until a fresh STEP load.
+  stepFaceData  = null;
+  stepFaceIndex = null;
+  setCompareViewEnabled(false);
+  setSelectionBasis('mesh', { force: true });
+  updateStepFaceUIVisibility();
 
   geometry = currentGeometry;
 

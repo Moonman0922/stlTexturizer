@@ -108,6 +108,7 @@
   <main>
     <!-- â”€â”€â”€ 3-D Viewport â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ -->
     <section id="viewport-section">
+      <div id="viewport-split">
       <div id="drop-zone" class="drop-zone">
         <div id="drop-hint" class="drop-hint">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -152,6 +153,17 @@
             <span data-i18n-html="cta.store">Support this tool? Shop at <a href="https://geni.us/CNCStoreTexture" target="_blank" rel="noopener noreferrer">CNCKitchen.STORE</a> or send a tip via <a href="https://www.paypal.me/CNCKitchen" target="_blank" rel="noopener noreferrer">PayPal</a> / <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener noreferrer">Ko-fi</a></span><button id="store-cta-dismiss" aria-label="Dismiss">&times;</button>
           </span>
         </div>
+      </div>
+      <!-- Split-view compare pane (Mode B of the STEP-face AB test, see
+           js/comparisonViewport.js). Hidden unless the loaded model has STEP
+           face data and the user turns on "Compare view" — shares the main
+           viewport's camera 1:1, so it always moves in lockstep, and traces
+           the true CAD-face boundaries so it reads as a distinct reference
+           view rather than a second copy of the same picture. -->
+      <div id="compare-pane" class="drop-zone hidden">
+        <canvas id="viewport-compare" role="img" aria-label="STEP CAD-face boundary comparison view"></canvas>
+        <div class="compare-pane-label" data-i18n="excl.comparePaneLabel">STEP CAD faces</div>
+      </div>
       </div>
       <div id="viewport-footer">
         <span id="mesh-info" class="mesh-info"></span>
@@ -409,8 +421,34 @@
           </div>
         </div>
 
+        <!-- CAD-face selection basis (only shown once a loaded STEP file reports
+             per-triangle B-rep face ids — see js/stepFaceSelection.js). Mode A
+             of the AB-test toggle: switches both what a click selects (a whole
+             analytic CAD face vs. painted mesh triangles) and what gets
+             highlighted, without touching the mode above (Exclude/Include). -->
+        <div id="excl-basis-row" class="excl-mode-row hidden">
+          <div class="excl-seg">
+            <button id="excl-basis-mesh" class="excl-seg-btn active" aria-pressed="true"
+              data-i18n="excl.basisMesh" data-i18n-title="excl.basisMeshTitle"
+              title="Select mesh triangles by hand (brush / fill), same as any other file format">Mesh</button>
+            <button id="excl-basis-step" class="excl-seg-btn" aria-pressed="false"
+              data-i18n="excl.basisStep" data-i18n-title="excl.basisStepTitle"
+              title="Click once to select a whole CAD surface from the original STEP file">STEP Face</button>
+          </div>
+        </div>
+        <p id="excl-step-face-status" class="excl-hint hidden" data-i18n="excl.stepFaceHint">Click a surface to select the whole CAD face.</p>
+
+        <!-- Split-view compare pane (Mode B of the AB-test toggle) -->
+        <div id="compare-view-row" class="form-row precision-masking-row hidden">
+          <label class="precision-label">
+            <input type="checkbox" id="compare-view-toggle" />
+            <span data-i18n="excl.compareView" data-i18n-title="excl.compareViewTitle"
+              title="Show a second, synced viewport tracing the real CAD face boundaries next to the main one">Compare view â“˜</span>
+          </label>
+        </div>
+
         <!-- Tool buttons -->
-        <div class="excl-tools">
+        <div id="excl-tools-row" class="excl-tools">
           <button id="excl-brush-btn" class="excl-tool-btn" aria-pressed="false"
             data-i18n-title="excl.toolBrushTitle"
             title="Brush: paint triangles to exclude">

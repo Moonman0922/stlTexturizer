@@ -50,14 +50,22 @@ export function loadSTLFile(file) {
  * BufferAttribute. Any existing normal attribute is deleted so that
  * setupGeometry will recompute it on the clean data.
  *
+ * `companionArrays` (optional): other per-triangle typed arrays — e.g. the
+ * STEP loader's faceOfTri/solidOfTri — that must be compacted through the
+ * exact same keep/drop decisions so they stay index-aligned with the
+ * triangles that survive. Compacted in place; each array's own .length is
+ * unchanged (only entries up to the returned triCount stay meaningful —
+ * callers slice() if they need an exact-length copy).
+ *
  * Returns { nanCount, degenerateCount } so callers can warn the user.
  */
-function validateAndCleanGeometry(geometry) {
+function validateAndCleanGeometry(geometry, companionArrays = []) {
   const pos  = geometry.attributes.position;
   const src  = pos.array;           // Float32Array, 9 floats per triangle
   const triCount = src.length / 9;
 
-  let writeIdx = 0;
+  let writeIdx = 0;    // float write cursor into src (9 per kept triangle)
+  let writeTri = 0;    // triangle write cursor into companionArrays (1 per kept triangle)
   let nanCount = 0;
   let degenerateCount = 0;
 
@@ -88,7 +96,11 @@ function validateAndCleanGeometry(geometry) {
       src[writeIdx+3] = bx; src[writeIdx+4] = by; src[writeIdx+5] = bz;
       src[writeIdx+6] = cx; src[writeIdx+7] = cy; src[writeIdx+8] = cz;
     }
+    for (const arr of companionArrays) {
+      if (writeTri !== t) arr[writeTri] = arr[t];
+    }
     writeIdx += 9;
+    writeTri++;
   }
 
   const removed = nanCount + degenerateCount;
@@ -113,9 +125,13 @@ function validateAndCleanGeometry(geometry) {
  * mesh. The app folds originOffset into its pose transform and undoes it on
  * export so files keep their original world coordinates and stay aligned with
  * sibling parts (issue #82).
+ *
+ * `companionArrays` — see validateAndCleanGeometry. Pass the STEP loader's
+ * per-triangle faceOfTri/solidOfTri here so they keep lining up 1:1 with the
+ * geometry even if invalid triangles get dropped.
  */
-export function setupGeometry(geometry) {
-  const { nanCount, degenerateCount } = validateAndCleanGeometry(geometry);
+export function setupGeometry(geometry, companionArrays = []) {
+  const { nanCount, degenerateCount } = validateAndCleanGeometry(geometry, companionArrays);
   geometry.computeBoundingBox();
   const box = geometry.boundingBox;
   const centre = new THREE.Vector3();

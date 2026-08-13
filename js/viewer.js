@@ -31,6 +31,8 @@ let _hoverMaterial = null;
 let _needsRender = true;
 let _diagEdges = null;       // LineSegments2 for open/non-manifold edges
 let _diagFaces = [];         // Array of THREE.Mesh overlays for face highlights
+let _stepBoundaryLines = null; // LineSegments2 tracing true STEP CAD-face boundaries
+let _secondaryRenderFn = null; // set by comparisonViewport.js when split-view compare is on
 
 // Turntable pitch clamp: keep the view direction at least this far (radians)
 // away from ±world Z. At the pole itself the up direction is ambiguous and
@@ -474,6 +476,14 @@ export function initViewer(canvas) {
     if (_needsRender) {
       _needsRender = false;
       renderer.render(scene, camera);
+      // Split-view compare pane (comparisonViewport.js): same scene/camera,
+      // so it's already in sync — just needs the boundary overlay shown only
+      // for its own pass, never bleeding into the primary render above.
+      if (_secondaryRenderFn) {
+        if (_stepBoundaryLines) _stepBoundaryLines.visible = true;
+        _secondaryRenderFn(scene, camera);
+        if (_stepBoundaryLines) _stepBoundaryLines.visible = false;
+      }
     }
   })();
 }
@@ -914,6 +924,72 @@ export function setDiagEdges(positions, color = 0xff0000) {
   scene.add(_diagEdges);
   requestRender();
 }
+
+// ── STEP face comparison overlay (split-view "AB test") ──────────────────────
+// A persistent line overlay tracing the boundaries between distinct STEP
+// B-rep faces (see js/stepFaceSelection.js's buildFaceBoundaryEdges). Kept
+// hidden during the primary render and shown only for the instant the
+// split-view comparison pane (js/comparisonViewport.js) renders the shared
+// scene through its own renderer — see the animate() loop above.
+
+/**
+ * Replace the CAD-face-boundary line overlay. Pass null/empty to clear it
+ * (e.g. on model unload, or when the loaded model has no STEP face data).
+ *
+ * @param {Float32Array|null} positions  pairs of 3D points (6 floats per edge)
+ * @param {number} color
+ */
+export function setStepFaceBoundaryEdges(positions, color = 0x39d0ff) {
+  if (_stepBoundaryLines) {
+    scene.remove(_stepBoundaryLines);
+    _stepBoundaryLines.geometry.dispose();
+    _stepBoundaryLines.material.dispose();
+    _stepBoundaryLines = null;
+  }
+  if (!positions || positions.length === 0) { requestRender(); return; }
+
+  const lsGeo = new LineSegmentsGeometry();
+  lsGeo.setPositions(positions);
+  const lsMat = new LineMaterial({
+    color,
+    linewidth: 2,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+    resolution: new THREE.Vector2(
+      renderer.domElement.width  * renderer.getPixelRatio(),
+      renderer.domElement.height * renderer.getPixelRatio(),
+    ),
+  });
+
+  _stepBoundaryLines = new LineSegments2(lsGeo, lsMat);
+  _stepBoundaryLines.renderOrder = 3;
+  _stepBoundaryLines.visible = false; // shown only during the comparison pane's render pass
+  scene.add(_stepBoundaryLines);
+  requestRender();
+}
+
+/**
+ * The boundary overlay is line-width-correct for whichever renderer's pixel
+ * size it was last set for (LineMaterial.resolution isn't per-camera). Since
+ * it only ever renders through the comparison pane, comparisonViewport.js
+ * calls this on its own resize so line thickness matches THAT canvas, not
+ * the (likely differently-sized) primary one.
+ */
+export function setStepBoundaryResolution(pixelWidth, pixelHeight) {
+  if (_stepBoundaryLines) _stepBoundaryLines.material.resolution.set(pixelWidth, pixelHeight);
+}
+
+/**
+ * Register the split-view comparison pane's render callback, called once
+ * right after the primary render whenever a frame is drawn — so both panes
+ * always show the same camera state, one frame apart from nothing. Pass
+ * null to unregister (compare view turned off).
+ *
+ * @param {((scene: THREE.Scene, camera: THREE.Camera) => void)|null} fn
+ */
+export function setSecondaryRenderer(fn) { _secondaryRenderFn = fn; }
 
 /**
  * Show a coloured face overlay for a set of triangles.
