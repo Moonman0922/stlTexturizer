@@ -208,17 +208,54 @@ export function buildFaceUVIndex(faceOfTri, positions, uv) {
  * the same trick settings.snapSeamlessWrap already uses for the app's
  * built-in Cylindrical projection mode.
  *
+ * ANCHORED SPAN (optional, user-directed): the periodic snap above only
+ * helps a face that meshStep itself reports as wrapping — it does nothing
+ * for an OPEN span like a half-cylinder fillet that never reaches its own
+ * seam, or for a span that crosses several different faces (a curved patch
+ * between two flat sides). `anchor` names two faces the user picked as the
+ * span's boundary; resolveAnchorSpan() below walks the shortest path
+ * between them through the caller's selected/textured face set, sums the
+ * REAL physical distance along that path from meshStep's own analytic
+ * surfaces (no mesh-projection approximation needed — see the module doc),
+ * and snaps a shared tile size so a whole number of tiles fits exactly
+ * between the two anchors, with the phase pinned so the first anchor
+ * boundary lands exactly on a tile edge — "starts and ends symmetrically,"
+ * per the design discussion this implements. Only the path's interior
+ * faces get this treatment; everything else in the model keeps its normal
+ * per-face size.
+ *
  * @param {ReturnType<typeof buildFaceUVIndex>} uvIndex
  * @param {number} scaleU_mm  absolute tile size, U (settings.scaleU)
  * @param {number} scaleV_mm  absolute tile size, V (settings.scaleV)
  * @param {Map<number,{uPeriod?:number,vPeriod?:number}>} [faceUV]  meshStep's
  *   per-face period info (step.faceUV) — omit to skip periodic snapping.
+ * @param {{faceA:number, faceB:number, allowedFaces:Iterable<number>}} [anchor]
+ *   two user-picked boundary faces plus the face set to path through —
+ *   typically the faces currently selected for texturing. Omit to skip.
  * @returns {Map<number, {tileU:number, tileV:number, offsetU:number, offsetV:number}>}
  */
-export function computeFacePhaseOffsets(uvIndex, scaleU_mm, scaleV_mm, faceUV = null) {
+export function computeFacePhaseOffsets(uvIndex, scaleU_mm, scaleV_mm, faceUV = null, anchor = null) {
   const { metricScale, adjacency } = uvIndex;
   const phase = new Map();
+
+  // Resolved BEFORE tileOf() below so its interior faces can override the
+  // normal per-face tile size with the path-derived one.
+  const anchorResolved = (anchor && anchor.faceA != null && anchor.faceB != null)
+    ? resolveAnchorSpan(uvIndex, anchor.faceA, anchor.faceB, anchor.allowedFaces || [], scaleU_mm, scaleV_mm)
+    : null;
+  const tileOverride = new Map();
+  if (anchorResolved) {
+    for (const fid of anchorResolved.interiorFaces) {
+      const m = metricScale.get(fid);
+      tileOverride.set(fid, {
+        tileU: Math.max(anchorResolved.idealTileMm / Math.max(m.mmPerU, 1e-9), 1e-9),
+        tileV: Math.max(anchorResolved.idealTileMm / Math.max(m.mmPerV, 1e-9), 1e-9),
+      });
+    }
+  }
+
   const tileOf = (fid) => {
+    if (tileOverride.has(fid)) return tileOverride.get(fid);
     const m = metricScale.get(fid);
     let tileU = Math.max(scaleU_mm / Math.max(m.mmPerU, 1e-9), 1e-9);
     let tileV = Math.max(scaleV_mm / Math.max(m.mmPerV, 1e-9), 1e-9);
@@ -253,22 +290,15 @@ export function computeFacePhaseOffsets(uvIndex, scaleU_mm, scaleV_mm, faceUV = 
     neighbors.get(faceB).push({ other: faceA, du: -du, dv: -dv });
   }
 
-  // BFS per connected component, seeded (offset 0,0) at the largest-area
-  // face of that component so the "reference" face is a stable, meaningful
-  // one rather than whatever Map iteration happens to visit first.
-  const areaOf = new Map();
-  for (const [fid, m] of metricScale) areaOf.set(fid, m.mmPerU * m.mmPerV); // proxy, doesn't need to be exact
-
   const visited = new Set();
   const remaining = new Set(metricScale.keys());
-  while (remaining.size > 0) {
-    let seed = null, seedArea = -Infinity;
-    for (const fid of remaining) {
-      const a = areaOf.get(fid) || 0;
-      if (a > seedArea) { seedArea = a; seed = fid; }
-    }
+
+  // Seed one component's BFS at `seed` with a starting phase, then flood
+  // outward — shared by the anchor's forced seed below and the normal
+  // largest-area auto-seed per remaining component.
+  const bfsFrom = (seed, offsetU, offsetV) => {
     const t = tileOf(seed);
-    phase.set(seed, { tileU: t.tileU, tileV: t.tileV, offsetU: 0, offsetV: 0 });
+    phase.set(seed, { tileU: t.tileU, tileV: t.tileV, offsetU, offsetV });
     visited.add(seed);
     remaining.delete(seed);
 
@@ -288,8 +318,135 @@ export function computeFacePhaseOffsets(uvIndex, scaleU_mm, scaleV_mm, faceUV = 
         queue.push(other);
       }
     }
+  };
+
+  // Pin the anchored span's seed FIRST — its offset comes from the anchor
+  // resolution (phase 0 at the first boundary), not the usual "0,0 at the
+  // largest face" default — then let the normal per-component loop below
+  // naturally skip it (already visited) and pick up everywhere else.
+  if (anchorResolved) {
+    bfsFrom(anchorResolved.seedFaceId, anchorResolved.seedOffsetU, anchorResolved.seedOffsetV);
+  }
+
+  // BFS per remaining connected component, seeded (offset 0,0) at the
+  // largest-area face of that component so the "reference" face is a
+  // stable, meaningful one rather than whatever Map iteration visits first.
+  const areaOf = new Map();
+  for (const [fid, m] of metricScale) areaOf.set(fid, m.mmPerU * m.mmPerV); // proxy, doesn't need to be exact
+
+  while (remaining.size > 0) {
+    let seed = null, seedArea = -Infinity;
+    for (const fid of remaining) {
+      const a = areaOf.get(fid) || 0;
+      if (a > seedArea) { seedArea = a; seed = fid; }
+    }
+    bfsFrom(seed, 0, 0);
   }
   return phase;
+}
+
+/**
+ * Resolve a user-picked two-face anchor span: the shortest path between
+ * faceA and faceB through allowedFaces, the real physical distance along
+ * it, and the resulting seed/offset for computeFacePhaseOffsets to pin.
+ * Returns null when no path exists (anchors aren't connected through
+ * allowedFaces) or the path has no interior face to anchor.
+ *
+ * Distance per interior face is measured along whichever of u/v shows the
+ * larger swing between where the face touches the previous vs. next face
+ * in the path — a reasonable default for the thin bands/strips this is
+ * meant for; a face whose path-crossing genuinely mixes both directions
+ * isn't a case this can represent with a single tile size anyway.
+ */
+function resolveAnchorSpan(uvIndex, faceA, faceB, allowedFaces, scaleU_mm, scaleV_mm) {
+  if (faceA === faceB) return null;
+  const { metricScale, adjacency } = uvIndex;
+  const allowed = new Set(allowedFaces);
+  allowed.add(faceA);
+  allowed.add(faceB);
+
+  const pairKey = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const neighborsOf = new Map(); // faceId -> [otherFaceId]
+  const recByPair = new Map();
+  for (const rec of adjacency) {
+    if (!allowed.has(rec.faceA) || !allowed.has(rec.faceB)) continue;
+    if (!neighborsOf.has(rec.faceA)) neighborsOf.set(rec.faceA, []);
+    if (!neighborsOf.has(rec.faceB)) neighborsOf.set(rec.faceB, []);
+    neighborsOf.get(rec.faceA).push(rec.faceB);
+    neighborsOf.get(rec.faceB).push(rec.faceA);
+    recByPair.set(pairKey(rec.faceA, rec.faceB), rec);
+  }
+
+  // Shortest path faceA -> faceB, restricted to `allowed`.
+  const prev = new Map();
+  const seen = new Set([faceA]);
+  const queue = [faceA];
+  let reached = false;
+  while (queue.length > 0) {
+    const cur = queue.shift();
+    if (cur === faceB) { reached = true; break; }
+    for (const other of (neighborsOf.get(cur) || [])) {
+      if (seen.has(other)) continue;
+      seen.add(other);
+      prev.set(other, cur);
+      queue.push(other);
+    }
+  }
+  if (!reached) return null;
+
+  const path = [faceB];
+  for (let cur = faceB; cur !== faceA; cur = prev.get(cur)) path.push(prev.get(cur));
+  path.reverse(); // [faceA, ...interior faces..., faceB]
+  if (path.length < 3) return null; // no interior face between the anchors
+
+  const meanUV = (rec, forFace) => (rec.faceA === forFace
+    ? [rec.sumUa / rec.count, rec.sumVa / rec.count]
+    : [rec.sumUb / rec.count, rec.sumVb / rec.count]);
+
+  let totalMm = 0;
+  const perFace = [];
+  for (let i = 1; i < path.length - 1; i++) {
+    const fid = path[i];
+    const m = metricScale.get(fid);
+    const prevRec = recByPair.get(pairKey(path[i - 1], fid));
+    const nextRec = recByPair.get(pairKey(fid, path[i + 1]));
+    if (!m || !prevRec || !nextRec) return null;
+    const [entryU, entryV] = meanUV(prevRec, fid);
+    const [exitU, exitV] = meanUV(nextRec, fid);
+    const du = Math.abs(exitU - entryU) * m.mmPerU;
+    const dv = Math.abs(exitV - entryV) * m.mmPerV;
+    const axis = du >= dv ? 'u' : 'v';
+    const mm = axis === 'u' ? du : dv;
+    if (mm < 1e-9) return null; // degenerate — this face doesn't advance the path
+    totalMm += mm;
+    perFace.push({ faceId: fid, entryU, entryV, axis });
+  }
+  if (totalMm < 1e-6) return null;
+
+  // A single nominal tile size for the whole path — see the module-level
+  // ANCHORED SPAN note for why this uses scaleU_mm regardless of which
+  // axis a given face's crossing happens to run along.
+  const tiles = Math.max(1, Math.round(totalMm / scaleU_mm));
+  const idealTileMm = totalMm / tiles;
+
+  // Pin the first interior face so its boundary with faceA sits exactly on
+  // a tile edge (phase 0); the rest of the path — and everything else in
+  // this component — inherits consistently from there via the normal BFS.
+  const seedFace = perFace[0];
+  const seedMetric = metricScale.get(seedFace.faceId);
+  const seedTileU = Math.max(idealTileMm / Math.max(seedMetric.mmPerU, 1e-9), 1e-9);
+  const seedTileV = Math.max(idealTileMm / Math.max(seedMetric.mmPerV, 1e-9), 1e-9);
+  const seedTile = seedFace.axis === 'u' ? seedTileU : seedTileV;
+  const entryVal = seedFace.axis === 'u' ? seedFace.entryU : seedFace.entryV;
+  const offset = -(entryVal / seedTile);
+
+  return {
+    interiorFaces: perFace.map(f => f.faceId),
+    idealTileMm,
+    seedFaceId: seedFace.faceId,
+    seedOffsetU: seedFace.axis === 'u' ? offset : 0,
+    seedOffsetV: seedFace.axis === 'v' ? offset : 0,
+  };
 }
 
 /**

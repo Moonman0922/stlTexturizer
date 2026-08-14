@@ -24,9 +24,11 @@
  *   bounds        {min,max,size,center} as {x,y,z} objects or Vector3s
  *   regularizeOpts  opts object for regularizeMesh
  *   mode          'export' | 'bake'
- *   stepUV        { faceOfTri: Uint32Array, uv: Float32Array }|null  original
- *     (pre-subdivision) STEP CAD-face data, aligned with `positions` — only
- *     read when settings.mappingMode is MODE_STEP_FACE_UV (see stepFaceUV.js)
+ *   stepUV        { faceOfTri: Uint32Array, uv: Float32Array, faceUV, anchor }
+ *     |null  original (pre-subdivision) STEP CAD-face data, aligned with
+ *     `positions` — only read when settings.mappingMode is MODE_STEP_FACE_UV
+ *     (see stepFaceUV.js). anchor is optional: { faceA, faceB, allowedFaces }
+ *     from a user-picked pattern anchor span, or null/omitted.
  * @param {function} [onEvent]  (stage, p, info) progress events; the caller
  *   maps stages to progress-bar fractions and translated labels.
  * @param {function} [shouldAbort]  checked between stages; true → return null.
@@ -266,10 +268,12 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
     // — displacement.js samples it directly instead of the procedural
     // projection when settings.mappingMode is MODE_STEP_FACE_UV.
     if (wantStepUV) {
-      const { faceOfTri, uv, faceUV } = input.stepUV;
+      const { faceOfTri, uv, faceUV, anchor } = input.stepUV;
       const uvIndex = buildFaceUVIndex(faceOfTri, input.positions, uv);
       const snapPeriodic = settings.stepUvSnapPeriodic !== false;
-      const facePhase = computeFacePhaseOffsets(uvIndex, settings.scaleU, settings.scaleV, snapPeriodic ? (faceUV || null) : null);
+      const facePhase = computeFacePhaseOffsets(
+        uvIndex, settings.scaleU, settings.scaleV, snapPeriodic ? (faceUV || null) : null, anchor || null
+      );
       const patternUV = reconstructStepPatternUV(
         subdivided.attributes.position.array, faceParentId, input.positions, faceOfTri, uv, facePhase
       );

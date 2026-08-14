@@ -603,6 +603,16 @@
             </div>
           </div>
 
+          <div id="step-uv-anchor-section" class="hidden">
+            <h3 class="panel-subsection-heading" data-i18n="ui.stepUvAnchorHeading">CAD Face UV Pattern Anchor</h3>
+            <p class="advanced-blurb" data-i18n="ui.stepUvAnchorDesc">Pick two boundary faces (e.g. the flat sides bordering a curved patch). The pattern on the textured faces between them is snapped so a whole number of tiles fits exactly, with matching phase at both ends — useful for a span that doesn't wrap on itself but should still start and end cleanly.</p>
+            <div class="form-row">
+              <button id="step-uv-anchor-pick-btn" class="excl-tool-btn" data-i18n="ui.stepUvAnchorPick" data-i18n-title="tooltips.stepUvAnchorPick" title="Click this, then click two boundary faces in the viewport.">Pick Anchor Faces</button>
+              <button id="step-uv-anchor-clear-btn" class="excl-clear-btn" data-i18n="ui.stepUvAnchorClear">Clear</button>
+            </div>
+            <p id="step-uv-anchor-status" class="excl-hint" data-i18n="ui.stepUvAnchorNone">No anchor set — pattern uses its normal automatic phase alignment.</p>
+          </div>
+
           <h3 class="panel-subsection-heading" data-i18n="ui.bakeTexturesHeading">Bake Textures</h3>
           <p class="advanced-blurb" data-i18n="ui.bakeTexturesDesc">Apply the current texture to the mesh and reload the result as the working model so you can keep editing.</p>
           <div class="form-row bake-mask-row">

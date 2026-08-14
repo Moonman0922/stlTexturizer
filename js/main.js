@@ -99,6 +99,15 @@ let stepFaceIndex      = null;   // Map<faceId, Set<triIdx>> from buildFaceIndex
 let selectionBasis      = 'mesh'; // 'mesh' | 'step' — which picking method the exclusion tools use
 let compareViewEnabled  = false;  // split-view "AB test" pane on/off
 
+// CAD Face UV pattern-anchor picking (js/stepFaceUV.js's resolveAnchorSpan):
+// two user-picked boundary faces that pin a repeating pattern to divide
+// evenly, with matching start/end phase, across whatever textured faces
+// connect them (a curved patch between two flat sides, e.g.). Reset
+// alongside stepFaceData everywhere that resets it.
+let stepUvAnchorPickActive = false;   // true while the next click(s) set an anchor face
+let stepUvAnchorFaceA      = null;    // STEP face id | null
+let stepUvAnchorFaceB      = null;    // STEP face id | null
+
 const settings = {
   mappingMode:   5,     // Triplanar default
   // Texture tile size in ABSOLUTE millimetres (one full repeat along U/V).
@@ -336,6 +345,10 @@ const stepUvModeOption = document.getElementById('mapping-mode-step-uv');
 const stepUvHint       = document.getElementById('step-uv-hint');
 const stepUvSnapSection = document.getElementById('step-uv-snap-section');
 const stepUvSnapChk     = document.getElementById('step-uv-snap-chk');
+const stepUvAnchorSection  = document.getElementById('step-uv-anchor-section');
+const stepUvAnchorPickBtn  = document.getElementById('step-uv-anchor-pick-btn');
+const stepUvAnchorClearBtn = document.getElementById('step-uv-anchor-clear-btn');
+const stepUvAnchorStatus   = document.getElementById('step-uv-anchor-status');
 const scaleUSlider    = document.getElementById('scale-u');
 const scaleVSlider    = document.getElementById('scale-v');
 const lockScaleBtn    = document.getElementById('lock-scale');
@@ -1845,6 +1858,14 @@ function wireEvents() {
     setCompareViewEnabled(compareViewToggle.checked);
   });
 
+  stepUvAnchorPickBtn.addEventListener('click', () => toggleStepUvAnchorPick(!stepUvAnchorPickActive));
+  stepUvAnchorClearBtn.addEventListener('click', () => {
+    stepUvAnchorFaceA = null;
+    stepUvAnchorFaceB = null;
+    if (stepUvAnchorPickActive) toggleStepUvAnchorPick(false);
+    updateStepUvAnchorStatus();
+  });
+
   // ── Precision masking wiring ──────────────────────────────────────────────
   precisionMaskingToggle.addEventListener('change', () => {
     togglePrecisionMasking(precisionMaskingToggle.checked);
@@ -1864,6 +1885,13 @@ function wireEvents() {
     if (placeOnFaceActive) {
       e.preventDefault();
       handlePlaceOnFaceClick(e);
+      return;
+    }
+
+    // CAD Face UV pattern-anchor picking
+    if (stepUvAnchorPickActive) {
+      e.preventDefault();
+      handleStepUvAnchorClick(e);
       return;
     }
 
@@ -2061,6 +2089,30 @@ function wireEvents() {
 
 // ── Exclusion helpers ─────────────────────────────────────────────────────────
 
+/**
+ * CAD face ids that will actually receive texture under the current
+ * exclude/include-only mask — the `allowedFaces` the pattern-anchor
+ * pathfinder (js/stepFaceUV.js's resolveAnchorSpan) is restricted to walk
+ * through. Best-effort: a face counts as "textured" if any of its
+ * triangles are — exact for STEP-face-basis painting (whole faces at a
+ * time), an approximation for brush/bucket painting that only covers part
+ * of a face.
+ */
+function _currentTexturedStepFaceIds() {
+  if (!stepFaceData) return [];
+  const { faceOfTri } = stepFaceData;
+  const triCount = faceOfTri.length;
+  const ids = new Set();
+  if (selectionMode) {
+    // Include-only: excludedFaces holds the INCLUDED triangle indices.
+    for (const t of excludedFaces) if (t < triCount) ids.add(faceOfTri[t]);
+  } else {
+    // Exclude mode: every triangle NOT in excludedFaces is textured.
+    for (let t = 0; t < triCount; t++) if (!excludedFaces.has(t)) ids.add(faceOfTri[t]);
+  }
+  return [...ids];
+}
+
 function setSelectionMode(include) {
   if (selectionMode === include) return;
   selectionMode = include;
@@ -2158,6 +2210,67 @@ function updateStepUvModeAvailability() {
     mappingSelect.value = '5';
   }
   stepUvHint.classList.toggle('hidden', settings.mappingMode !== 7 /* MODE_STEP_FACE_UV */);
+  stepUvAnchorSection.classList.toggle('hidden', !available);
+  // Always reset — even when the new model still has STEP UV data, the
+  // previous model's face ids don't mean anything for this one.
+  stepUvAnchorFaceA = null;
+  stepUvAnchorFaceB = null;
+  if (stepUvAnchorPickActive) toggleStepUvAnchorPick(false);
+  updateStepUvAnchorStatus();
+}
+
+/**
+ * Toggle the "pick pattern anchor faces" tool (js/stepFaceUV.js's
+ * resolveAnchorSpan). Independent of the exclusion-tool state machine —
+ * like Place on Face, this needs whole-face clicks but writes to
+ * stepUvAnchorFaceA/B instead of excludedFaces, so it can't just reuse the
+ * existing 'stepFace' exclusion tool.
+ */
+function toggleStepUvAnchorPick(active) {
+  stepUvAnchorPickActive = active;
+  stepUvAnchorPickBtn.classList.toggle('active', active);
+  if (active) {
+    if (exclusionTool) setExclusionTool(null);
+    if (placeOnFaceActive) togglePlaceOnFace(false);
+    if (rotateActive) toggleRotateMode(false);
+    canvas.style.cursor = 'crosshair';
+  } else if (!exclusionTool) {
+    canvas.style.cursor = '';
+  }
+  updateStepUvAnchorStatus();
+}
+
+/** Handle a click while stepUvAnchorPickActive: fills A, then B, then starts over. */
+function handleStepUvAnchorClick(e) {
+  const triIdx = pickTriangle(e);
+  if (triIdx < 0 || !stepFaceData) return;
+  const faceId = stepFaceData.faceOfTri[triIdx];
+  if (stepUvAnchorFaceA == null) {
+    stepUvAnchorFaceA = faceId;
+  } else if (stepUvAnchorFaceB == null && faceId !== stepUvAnchorFaceA) {
+    stepUvAnchorFaceB = faceId;
+    toggleStepUvAnchorPick(false); // both set — done
+  } else {
+    // Both already set, or the same face clicked twice — start a fresh pick.
+    stepUvAnchorFaceA = faceId;
+    stepUvAnchorFaceB = null;
+  }
+  updateStepUvAnchorStatus();
+}
+
+function updateStepUvAnchorStatus() {
+  const faces = stepFaceData && stepFaceData.faces;
+  if (stepUvAnchorFaceA == null) {
+    stepUvAnchorStatus.textContent = stepUvAnchorPickActive
+      ? t('ui.stepUvAnchorPickingA')
+      : t('ui.stepUvAnchorNone');
+  } else if (stepUvAnchorFaceB == null) {
+    stepUvAnchorStatus.textContent = t('ui.stepUvAnchorPickingB', { a: describeFace(stepUvAnchorFaceA, faces) });
+  } else {
+    stepUvAnchorStatus.textContent = t('ui.stepUvAnchorSet', {
+      a: describeFace(stepUvAnchorFaceA, faces), b: describeFace(stepUvAnchorFaceB, faces),
+    });
+  }
 }
 
 /** Turn the split-view comparison pane (Mode B) on/off. */
@@ -5087,7 +5200,12 @@ async function handleExport(format = 'stl') {
       regularizeOpts: _regularizeOpts(),
       mode: 'export',
       stepUV: (stepFaceData && stepFaceData.uv)
-        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV }
+        ? {
+            faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV,
+            anchor: (stepUvAnchorFaceA != null && stepUvAnchorFaceB != null)
+              ? { faceA: stepUvAnchorFaceA, faceB: stepUvAnchorFaceB, allowedFaces: _currentTexturedStepFaceIds() }
+              : null,
+          }
         : null,
     }, _onExportPipelineEvent, isStale);
     if (!result || isStale()) return;
@@ -5391,7 +5509,12 @@ async function bakeTextures() {
       regularizeOpts: _regularizeOpts(),
       mode: 'bake',
       stepUV: (stepFaceData && stepFaceData.uv)
-        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV }
+        ? {
+            faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV,
+            anchor: (stepUvAnchorFaceA != null && stepUvAnchorFaceB != null)
+              ? { faceA: stepUvAnchorFaceA, faceB: stepUvAnchorFaceB, allowedFaces: _currentTexturedStepFaceIds() }
+              : null,
+          }
         : null,
     }, _onBakePipelineEvent, () => false);
     if (!result) throw new Error('bake pipeline aborted');
