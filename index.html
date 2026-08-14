@@ -121,6 +121,44 @@
         </div>
         <canvas id="viewport" role="img" aria-label="3D model preview"></canvas>
         <div id="brush-cursor"></div>
+        <!-- ViewCube navigation gizmo (js/viewCube.js + js/viewer.js) renders
+             into this canvas's top-right corner directly via WebGL scissor —
+             there's no DOM element for the cube itself. These 4 nudge arrows
+             (Fusion-360-style: step to the adjacent face) and the Home /
+             rotate-90° row below are real DOM buttons, positioned to match
+             the gizmo's known on-screen footprint (js/viewer.js's
+             _viewCubeSize/_viewCubeMargin — keep in sync if either changes).
+             The arrows only show while the view is square-on to a face;
+             viewer.js toggles their "hidden" class each render. -->
+        <button id="viewcube-nudge-up" class="viewcube-nudge hidden" data-dir="up" aria-label="Step to the face above" title="Step to the face above">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 5l8 10H4z"/></svg>
+        </button>
+        <button id="viewcube-nudge-down" class="viewcube-nudge hidden" data-dir="down" aria-label="Step to the face below" title="Step to the face below">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M12 19L4 9h16z"/></svg>
+        </button>
+        <button id="viewcube-nudge-left" class="viewcube-nudge hidden" data-dir="left" aria-label="Step to the face on the left" title="Step to the face on the left">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M5 12l10-8v16z"/></svg>
+        </button>
+        <button id="viewcube-nudge-right" class="viewcube-nudge hidden" data-dir="right" aria-label="Step to the face on the right" title="Step to the face on the right">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M19 12L9 4v16z"/></svg>
+        </button>
+        <div id="viewcube-controls" class="viewcube-controls">
+          <button id="viewcube-home-btn" class="viewcube-btn" data-i18n-title="ui.viewHomeTitle" title="Reset to the default view">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/><path d="M9 20v-6h6v6"/>
+            </svg>
+          </button>
+          <button id="viewcube-ccw-btn" class="viewcube-btn" data-i18n-title="ui.viewRotateCcwTitle" title="Rotate view 90° counter-clockwise">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 10a8 8 0 1 1 2.06 6.36"/><path d="M4 4v6h6"/>
+            </svg>
+          </button>
+          <button id="viewcube-cw-btn" class="viewcube-btn" data-i18n-title="ui.viewRotateCwTitle" title="Rotate view 90° clockwise">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 10a8 8 0 1 0-2.06 6.36"/><path d="M20 4v6h-6"/>
+            </svg>
+          </button>
+        </div>
         <div id="mesh-diagnostics" class="mesh-diagnostics hidden">
           <button id="mesh-diag-dismiss" class="mesh-diag-dismiss" aria-label="Dismiss">&times;</button>
           <div id="mesh-diag-fast" class="mesh-diag-results"></div>

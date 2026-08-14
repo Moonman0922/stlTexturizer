@@ -291,6 +291,67 @@ main {
   inset: 0;
 }
 
+/* Home / rotate-90° buttons under the ViewCube gizmo (the cube itself is
+   drawn straight into the canvas via WebGL scissor in js/viewer.js — no DOM
+   element for it, so these coordinates just need to clear its footprint:
+   92px cube + 14px margin from the top, per _viewCubeSize/_viewCubeMargin). */
+.viewcube-controls {
+  position: absolute;
+  top: 112px;
+  right: 14px;
+  display: flex;
+  gap: 4px;
+  z-index: 5;
+}
+
+.viewcube-btn {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: color-mix(in srgb, var(--surface) 85%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.viewcube-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Fusion-360-style nudge arrows: step to the adjacent face. Positioned to
+   sit just inside each edge of the ViewCube's own 92x92 footprint (the
+   gizmo's orthographic frustum already leaves that much empty margin around
+   the rendered cube, so the arrows don't need any extra space of their
+   own) — see the matching _viewCubeSize/_viewCubeMargin comment in
+   js/viewer.js. Hidden by default; viewer.js shows them only when the
+   camera is square-on to a face. */
+.viewcube-nudge {
+  position: absolute;
+  z-index: 6;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  opacity: 0.75;
+  cursor: pointer;
+}
+.viewcube-nudge:hover { color: var(--accent); opacity: 1; }
+.viewcube-nudge.hidden { display: none; }
+
+#viewcube-nudge-up    { top: 16px;  right: 51px; }
+#viewcube-nudge-down  { top: 88px;  right: 51px; }
+#viewcube-nudge-left  { top: 52px;  right: 88px; }
+#viewcube-nudge-right { top: 52px;  right: 16px; }
+
 #store-cta-wrapper {
   position: absolute;
   bottom: 14px;

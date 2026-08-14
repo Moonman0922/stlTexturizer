@@ -10,6 +10,7 @@ import { initViewer, loadGeometry, setMeshMaterial, setMeshGeometry, setWirefram
          setProjection, requestRender,
          clearDiagOverlays, setDiagEdges, addDiagFaces,
          setStepFaceBoundaryEdges,
+         snapHome, rotateView90,
          setRotationGizmo, isGizmoDragging } from './viewer.js';
 import { initComparisonViewport, setComparisonActive } from './comparisonViewport.js';
 import { loadModelFile, computeBounds, getTriangleCount }  from './stlLoader.js';
@@ -318,6 +319,9 @@ const wireframeToggle  = document.getElementById('wireframe-toggle');
 const projectionToggle = document.getElementById('projection-toggle');
 const placeOnFaceBtn   = document.getElementById('place-on-face-btn');
 const rotateBtn        = document.getElementById('rotate-btn');
+const viewCubeHomeBtn  = document.getElementById('viewcube-home-btn');
+const viewCubeCcwBtn   = document.getElementById('viewcube-ccw-btn');
+const viewCubeCwBtn    = document.getElementById('viewcube-cw-btn');
 const rotateControls   = document.getElementById('rotate-controls');
 const rotateXInput     = document.getElementById('rotate-x');
 const rotateYInput     = document.getElementById('rotate-y');
@@ -1602,6 +1606,11 @@ function wireEvents() {
   dispPreviewToggle.addEventListener('change', () => {
     toggleDisplacementPreview(dispPreviewToggle.checked);
   });
+
+  // ── ViewCube Home / rotate-90° ──
+  viewCubeHomeBtn.addEventListener('click', () => snapHome());
+  viewCubeCcwBtn.addEventListener('click', () => rotateView90(-1));
+  viewCubeCwBtn.addEventListener('click', () => rotateView90(1));
 
   // ── Place on Face ──
   placeOnFaceBtn.addEventListener('click', () => {

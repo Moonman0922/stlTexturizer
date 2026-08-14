@@ -8,6 +8,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { LineSegments2 }  from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
 import { LineMaterial }   from 'three/addons/lines/LineMaterial.js';
+import { buildViewCubeGroup, viewUpFor } from './viewCube.js';
 
 // Pre-allocated temp objects for hot-path event handlers (avoid GC pressure)
 const _tmpQ1 = new THREE.Quaternion();
@@ -33,6 +34,26 @@ let _diagEdges = null;       // LineSegments2 for open/non-manifold edges
 let _diagFaces = [];         // Array of THREE.Mesh overlays for face highlights
 let _stepBoundaryLines = null; // LineSegments2 tracing true STEP CAD-face boundaries
 let _secondaryRenderFn = null; // set by comparisonViewport.js when split-view compare is on
+
+// ── ViewCube navigation gizmo state ───────────────────────────────────────
+// Rendered as a screen-space corner overlay on the SAME canvas via
+// renderer.setViewport/setScissor — no second WebGL context needed, unlike
+// the compare pane (which has to be a genuinely separate canvas since it
+// shows different content at the same time as the main view).
+let _viewCubeScene   = null;
+let _viewCubeCam     = null;
+let _viewCubeGroup   = null;
+let _viewCubeRegions = [];
+let _viewCubeHoverHalo = null;   // reusable translucent highlight box
+let _viewCubePalette = null;
+const _viewCubeSize   = 92;  // CSS px, square
+const _viewCubeMargin = 14;  // CSS px, from the canvas's top-right corner
+let _viewCubeCssRect = { x: 0, y: 0, w: 0, h: 0 };      // top-left origin, CSS px — for hit-testing
+let _viewCubeGLRect  = { x: 0, y: 0, w: 0, h: 0 };       // bottom-left origin, drawing-buffer px — for setViewport/setScissor
+let _viewCubeAnim = null; // { fromPos, toPos, fromUp, toUp, target, start, duration } | null
+const _viewCubeRaycaster = new THREE.Raycaster();
+let _viewCubeNudgeEls = null; // { up, down, left, right } DOM buttons, or null before _initViewCube runs
+let _viewCubeOnFace = false;  // last-known "camera is square-on to a face" state, to skip redundant DOM writes
 
 // Turntable pitch clamp: keep the view direction at least this far (radians)
 // away from ±world Z. At the pole itself the up direction is ambiguous and
@@ -469,10 +490,14 @@ export function initViewer(canvas) {
   // Rotation gizmo interaction
   _initGizmoInteraction();
 
+  // ViewCube navigation gizmo (home / face / edge / corner views)
+  _initViewCube();
+
   // Render loop
   (function animate() {
     requestAnimationFrame(animate);
     controls.update();
+    if (_viewCubeAnim && _stepViewCubeAnim()) _needsRender = true;
     if (_needsRender) {
       _needsRender = false;
       renderer.render(scene, camera);
@@ -484,6 +509,7 @@ export function initViewer(canvas) {
         _secondaryRenderFn(scene, camera);
         if (_stepBoundaryLines) _stepBoundaryLines.visible = false;
       }
+      _renderViewCube();
     }
   })();
 }
@@ -508,6 +534,7 @@ function onResize() {
       h * renderer.getPixelRatio(),
     );
   }
+  _updateViewCubeRect(w, h);
   requestRender();
 }
 
@@ -743,6 +770,292 @@ export function setViewerTheme(isLight) {
   grid.rotation.x = Math.PI / 2;
   grid.position.z = savedZ;
   scene.add(grid);
+  _rebuildViewCube(isLight);
+  requestRender();
+}
+
+// ── ViewCube navigation gizmo ──────────────────────────────────────────────
+// Fusion 360 / SolidWorks-style corner cube: click a face for an orthogonal
+// view, an edge for a 45° view, a corner for an isometric-style view. Lives
+// in its own tiny Scene + orthographic camera, rendered as a screen-space
+// overlay on the SAME canvas via setViewport/setScissor (see _renderViewCube)
+// so it never needs a second WebGL context. js/viewCube.js owns the 26-region
+// geometry/labeling and the up-vector math; this file owns turning that into
+// pixels and driving the shared main camera when a region is clicked.
+
+function _viewCubePaletteFor(isLight) {
+  return isLight
+    ? {
+        faceColor: 0xf5f5fa, edgeColor: 0xe4e4ee, cornerColor: 0xd5d5e4,
+        hoverColor: 0x6355e0, strokeColor: 0x9a9ab2, faceCss: '#f5f5fa', textCss: '#33334a',
+        bgColor: 0xffffff,
+      }
+    : {
+        faceColor: 0x2c2c37, edgeColor: 0x373743, cornerColor: 0x42424f,
+        hoverColor: 0x7c6aff, strokeColor: 0x54546a, faceCss: '#2c2c37', textCss: '#dcdce8',
+        bgColor: 0x1a1a1f,
+      };
+}
+
+function _rebuildViewCube(isLight) {
+  _viewCubePalette = _viewCubePaletteFor(!!isLight);
+  if (!_viewCubeScene) return; // not initialized yet — _initViewCube() will use the palette above
+  _viewCubeScene.background = new THREE.Color(_viewCubePalette.bgColor);
+  if (_viewCubeGroup) {
+    _viewCubeScene.remove(_viewCubeGroup);
+    _viewCubeGroup.traverse((obj) => {
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) { if (obj.material.map) obj.material.map.dispose(); obj.material.dispose(); }
+    });
+  }
+  const built = buildViewCubeGroup(_viewCubePalette);
+  _viewCubeGroup = built.group;
+  _viewCubeRegions = built.regions;
+  _viewCubeScene.add(_viewCubeGroup);
+}
+
+function _updateViewCubeRect(wCss, hCss) {
+  if (!renderer) return;
+  const ratio = renderer.getPixelRatio();
+  _viewCubeCssRect = {
+    x: wCss - _viewCubeMargin - _viewCubeSize,
+    y: _viewCubeMargin,
+    w: _viewCubeSize,
+    h: _viewCubeSize,
+  };
+  _viewCubeGLRect = {
+    x: Math.round(_viewCubeCssRect.x * ratio),
+    // WebGL viewport/scissor Y is measured from the canvas BOTTOM; the CSS
+    // rect above is top-left origin, so flip it.
+    y: Math.round((hCss - _viewCubeCssRect.y - _viewCubeCssRect.h) * ratio),
+    w: Math.round(_viewCubeCssRect.w * ratio),
+    h: Math.round(_viewCubeCssRect.h * ratio),
+  };
+}
+
+function _initViewCube() {
+  if (!_viewCubePalette) _viewCubePalette = _viewCubePaletteFor(false);
+  _viewCubeScene = new THREE.Scene();
+  // Without this the gizmo's scissored viewport clears to WebGL's default
+  // (opaque black) every frame, since renderer.render()'s implicit autoClear
+  // has nothing else to clear to — a Scene with no background isn't the
+  // same as a transparent one here.
+  _viewCubeScene.background = new THREE.Color(_viewCubePalette.bgColor);
+  const built = buildViewCubeGroup(_viewCubePalette);
+  _viewCubeGroup = built.group;
+  _viewCubeRegions = built.regions;
+  _viewCubeScene.add(_viewCubeGroup);
+
+  _viewCubeHoverHalo = new THREE.Mesh(
+    new THREE.BoxGeometry(1, 1, 1),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.28, depthTest: false }),
+  );
+  _viewCubeHoverHalo.visible = false;
+  _viewCubeHoverHalo.renderOrder = 1;
+  _viewCubeScene.add(_viewCubeHoverHalo);
+
+  _viewCubeCam = new THREE.OrthographicCamera(-0.9, 0.9, 0.9, -0.9, 0.1, 10);
+  _viewCubeCam.up.set(0, 0, 1);
+
+  _updateViewCubeRect(renderer.domElement.clientWidth, renderer.domElement.clientHeight);
+
+  const canvas = renderer.domElement;
+
+  function ndcInGizmo(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const px = clientX - rect.left, py = clientY - rect.top;
+    const { x, y, w, h } = _viewCubeCssRect;
+    if (px < x || px > x + w || py < y || py > y + h) return null;
+    return { x: ((px - x) / w) * 2 - 1, y: -((py - y) / h) * 2 + 1 };
+  }
+
+  function pickRegionMesh(clientX, clientY) {
+    const ndc = ndcInGizmo(clientX, clientY);
+    if (!ndc) return null;
+    _viewCubeRaycaster.setFromCamera(ndc, _viewCubeCam);
+    const hits = _viewCubeRaycaster.intersectObjects(_viewCubeGroup.children, false);
+    // Defensive: skip any decorative (non-region) children a hit might land
+    // on instead of trusting hits[0] blindly.
+    const hit = hits.find((h) => h.object.userData.viewDir);
+    return hit ? hit.object : null;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const mesh = pickRegionMesh(e.clientX, e.clientY);
+    if (!mesh || !mesh.userData.viewDir) return;
+    // stopImmediatePropagation (not just stopPropagation/preventDefault) so
+    // this reliably wins over the custom-pivot-orbit pointerdown registered
+    // on the same canvas earlier in initViewer, regardless of listener
+    // registration order — capture:true alone doesn't guarantee that for
+    // two listeners on the very same element.
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    snapToView(mesh.userData.viewDir);
+  }, { capture: true });
+
+  document.addEventListener('pointermove', (e) => {
+    const mesh = pickRegionMesh(e.clientX, e.clientY);
+    if (!mesh || !mesh.userData.viewDir) {
+      if (_viewCubeHoverHalo.visible) { _viewCubeHoverHalo.visible = false; requestRender(); }
+      return;
+    }
+    const p = mesh.geometry.parameters; // BoxGeometry -> {width,height,depth}
+    _viewCubeHoverHalo.position.copy(mesh.position);
+    _viewCubeHoverHalo.scale.set(p.width * 1.12, p.height * 1.12, p.depth * 1.12);
+    _viewCubeHoverHalo.visible = true;
+    canvas.style.cursor = 'pointer';
+    requestRender();
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    if (_viewCubeHoverHalo) _viewCubeHoverHalo.visible = false;
+  });
+
+  // Fusion-360-style nudge arrows — only meaningful (and only shown, see
+  // _renderViewCube) when square-on to a face; wiring the click handlers
+  // unconditionally is harmless since they're display:none otherwise.
+  _viewCubeNudgeEls = {
+    up:    document.getElementById('viewcube-nudge-up'),
+    down:  document.getElementById('viewcube-nudge-down'),
+    left:  document.getElementById('viewcube-nudge-left'),
+    right: document.getElementById('viewcube-nudge-right'),
+  };
+  for (const [dir, el] of Object.entries(_viewCubeNudgeEls)) {
+    if (el) el.addEventListener('click', () => _stepFace(dir));
+  }
+}
+
+/**
+ * Step from the current face-on view to the adjacent face in screen
+ * direction `dir` ('up'|'down'|'left'|'right') — e.g. from FRONT, "up"
+ * steps to TOP. Rotates both the camera offset and its up vector by the
+ * same 90° turn around a screen-relative axis (the camera's right axis for
+ * up/down, its own up axis for left/right), which keeps the roll
+ * continuous instead of recomputing "up" from scratch and risking a flip.
+ */
+function _stepFace(direction) {
+  if (!controls) return;
+  const dir = camera.position.clone().sub(controls.target).normalize(); // target -> camera
+  const up = camera.up.clone().normalize();
+  const forward = dir.clone().negate();
+  const right = new THREE.Vector3().crossVectors(forward, up).normalize();
+
+  let axis, angle;
+  if (direction === 'up')         { axis = right; angle = -Math.PI / 2; }
+  else if (direction === 'down')  { axis = right; angle =  Math.PI / 2; }
+  else if (direction === 'left')  { axis = up;     angle = -Math.PI / 2; }
+  else if (direction === 'right') { axis = up;     angle =  Math.PI / 2; }
+  else return;
+
+  const q = new THREE.Quaternion().setFromAxisAngle(axis, angle);
+  const newDir = dir.applyQuaternion(q);
+  const newUp = up.applyQuaternion(q);
+  const dist = camera.position.distanceTo(controls.target) || 200;
+  const targetPos = controls.target.clone().addScaledVector(newDir, dist);
+  _startViewCubeAnim(targetPos, newUp, 300);
+  requestRender();
+}
+
+/** The face region the camera is currently square-on to, or null if it's at
+ * an edge/corner/arbitrary orbit angle. Threshold is tight (>0.999 ~ 2.5°)
+ * so the nudge arrows only appear once a snap has actually settled. */
+function _currentFaceRegion() {
+  if (!controls || !_viewCubeRegions.length) return null;
+  const dir = _tmpV1.copy(camera.position).sub(controls.target);
+  if (dir.lengthSq() < 1e-10) return null;
+  dir.normalize();
+  for (const r of _viewCubeRegions) {
+    if (r.kind === 'face' && r.dir.dot(dir) > 0.999) return r;
+  }
+  return null;
+}
+
+function _renderViewCube() {
+  if (!_viewCubeScene || !controls) return;
+  const viewDir = _tmpV1.copy(camera.position).sub(controls.target);
+  if (viewDir.lengthSq() < 1e-10) return; // camera exactly at target — nothing sensible to show
+  viewDir.normalize();
+  _viewCubeCam.position.copy(viewDir).multiplyScalar(2.4);
+  _viewCubeCam.up.copy(camera.up);
+  _viewCubeCam.lookAt(0, 0, 0);
+
+  renderer.setScissorTest(true);
+  renderer.setScissor(_viewCubeGLRect.x, _viewCubeGLRect.y, _viewCubeGLRect.w, _viewCubeGLRect.h);
+  renderer.setViewport(_viewCubeGLRect.x, _viewCubeGLRect.y, _viewCubeGLRect.w, _viewCubeGLRect.h);
+  renderer.clearDepth(); // gizmo must draw on top regardless of what's behind it in the main scene
+  renderer.render(_viewCubeScene, _viewCubeCam);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, renderer.domElement.width, renderer.domElement.height);
+
+  const onFace = !!_currentFaceRegion();
+  if (onFace !== _viewCubeOnFace) {
+    _viewCubeOnFace = onFace;
+    if (_viewCubeNudgeEls) {
+      for (const el of Object.values(_viewCubeNudgeEls)) {
+        if (el) el.classList.toggle('hidden', !onFace);
+      }
+    }
+  }
+}
+
+function _startViewCubeAnim(targetPos, targetUp, duration = 350) {
+  _viewCubeAnim = {
+    fromPos: camera.position.clone(),
+    toPos: targetPos.clone(),
+    fromUp: camera.up.clone(),
+    toUp: targetUp.clone(),
+    target: controls.target.clone(),
+    start: performance.now(),
+    duration,
+  };
+}
+
+// Returns true while still animating (caller keeps requesting renders).
+function _stepViewCubeAnim() {
+  const a = _viewCubeAnim;
+  const t = Math.min(1, (performance.now() - a.start) / a.duration);
+  const ease = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2; // ease-in-out quad
+  camera.position.lerpVectors(a.fromPos, a.toPos, ease);
+  camera.up.lerpVectors(a.fromUp, a.toUp, ease).normalize();
+  camera.lookAt(a.target);
+  if (t >= 1) _viewCubeAnim = null;
+  return true;
+}
+
+/**
+ * Snap the camera to look along `dir` (a direction FROM the orbit target
+ * TOWARD the camera — i.e. the opposite of the viewing direction), keeping
+ * the current zoom/distance. Animated (see _stepViewCubeAnim), not instant.
+ * @param {THREE.Vector3 | [number,number,number]} dir
+ */
+export function snapToView(dir) {
+  if (!controls) return;
+  const d = (Array.isArray(dir) ? new THREE.Vector3(...dir) : dir.clone()).normalize();
+  const dist = camera.position.distanceTo(controls.target) || 200;
+  const targetPos = controls.target.clone().addScaledVector(d, dist);
+  _startViewCubeAnim(targetPos, viewUpFor(d));
+  requestRender();
+}
+
+/** Reset to this app's default starting view (see initViewer's orthoCamera.position). */
+export function snapHome() {
+  snapToView(new THREE.Vector3(120, -200, 100));
+}
+
+/**
+ * Rotate the current view 90° clockwise (sign=1) or counter-clockwise
+ * (sign=-1) around the viewing axis itself — the model face you're looking
+ * at stays the same, just spun in-plane. Matches the CW/CCW buttons next to
+ * the ViewCube in most CAD tools.
+ */
+export function rotateView90(sign) {
+  if (!controls) return;
+  const axis = _tmpV1.copy(camera.position).sub(controls.target).normalize();
+  const q = _tmpQ1.setFromAxisAngle(axis, Math.sign(sign) * Math.PI / 2);
+  const newPos = _tmpV2.copy(camera.position).sub(controls.target).applyQuaternion(q).add(controls.target);
+  const newUp = camera.up.clone().applyQuaternion(q);
+  _startViewCubeAnim(newPos, newUp, 250);
   requestRender();
 }
 
