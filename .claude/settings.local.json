@@ -60,7 +60,8 @@
       "Bash(node --max-old-space-size=8192 bench-tri-estimate.mjs)",
       "Bash(node --max-old-space-size=8192 bench-sim-timing.mjs)",
       "Bash(node --max-old-space-size=8192 -e ' *)",
-      "mcp__Claude_Code_Remote__add_repo"
+      "mcp__Claude_Code_Remote__add_repo",
+      "Bash(cp \"/root/.claude/uploads/e8bffd07-5e9b-5097-89fb-125c1f82ed50/d2c77fd6-testing.step\" /tmp/claude-0/-home-user-stlTexturizer/e8bffd07-5e9b-5097-89fb-125c1f82ed50/scratchpad/testing.step *)"
     ]
   }
 }
