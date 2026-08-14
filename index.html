@@ -272,8 +272,10 @@
             <option value="0" data-i18n-opt="projection.planarXY">Planar XY</option>
             <option value="1" data-i18n-opt="projection.planarXZ">Planar XZ</option>
             <option value="2" data-i18n-opt="projection.planarYZ">Planar YZ</option>
+            <option value="7" id="mapping-mode-step-uv" hidden disabled data-i18n-opt="projection.stepFaceUv">CAD Face UV (STEP)</option>
           </select>
         </div>
+        <div class="form-row hint hidden" id="step-uv-hint" data-i18n="hints.stepUvExportOnly">Uses each CAD face's true surface UV, stitched across face boundaries. Applied on Export/Bake only — the live 3D preview shows an approximate projection.</div>
         <div class="form-row slider-row" style="display:none">
           <label for="seam-blend" data-i18n="labels.seamBlend" data-i18n-title="tooltips.seamBlend" title="Softens the hard seam where projection faces meet. Effective for Cubic and Cylindrical modes.">Seam Blend â“˜</label>
           <input type="range" id="seam-blend" min="0" max="1" step="0.01" value="1" />

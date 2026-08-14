@@ -24,6 +24,9 @@
  *   bounds        {min,max,size,center} as {x,y,z} objects or Vector3s
  *   regularizeOpts  opts object for regularizeMesh
  *   mode          'export' | 'bake'
+ *   stepUV        { faceOfTri: Uint32Array, uv: Float32Array }|null  original
+ *     (pre-subdivision) STEP CAD-face data, aligned with `positions` — only
+ *     read when settings.mappingMode is MODE_STEP_FACE_UV (see stepFaceUV.js)
  * @param {function} [onEvent]  (stage, p, info) progress events; the caller
  *   maps stages to progress-bar fractions and translated labels.
  * @param {function} [shouldAbort]  checked between stages; true → return null.
@@ -43,6 +46,8 @@ import { regularizeMesh } from './regularize.js';
 import { applyDisplacement } from './displacement.js';
 import { decimate } from './decimation.js';
 import { resolveTJunctions, countEdgeDefects, countAreaSlivers } from './meshRepair.js';
+import { MODE_STEP_FACE_UV } from './mapping.js';
+import { buildFaceUVIndex, computeFacePhaseOffsets, reconstructStepPatternUV } from './stepFaceUV.js';
 
 const yieldFrame = () => new Promise(r => setTimeout(r, 0));
 
@@ -198,6 +203,12 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
   const mode = input.mode === 'bake' ? 'bake' : 'export';
   const bounds = reviveBounds(input.bounds);
 
+  // CAD-face-native pattern UV (js/stepFaceUV.js) needs the same original ->
+  // subdivided-triangle lineage bake mode already tracks, so "does this run
+  // need faceParentId" is no longer just "is this bake mode".
+  const wantStepUV = settings.mappingMode === MODE_STEP_FACE_UV && !!input.stepUV;
+  const needParentId = mode === 'bake' || wantStepUV;
+
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(input.positions, 3));
 
@@ -221,12 +232,12 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
     if (shouldAbort()) return null;
 
     // Regularize sub-slivers, then re-subdivide stretched edges. Skipped when
-    // the Advanced toggle is off. Export mode passes a zero parent map (it
-    // doesn't consume parents); bake mode threads + composes the real one.
+    // the Advanced toggle is off. Runs that don't consume parents pass a zero
+    // map; bake mode and CAD-face-UV mode thread + compose the real one.
     if (settings.regularizeEnabled) {
       onEvent('regularize', 0);
       await yieldFrame();
-      const regParents = mode === 'bake'
+      const regParents = needParentId
         ? faceParentId
         : new Int32Array(subdivided.attributes.position.count / 3);
       const reg = regularizeMesh(subdivided, regParents, settings.refineLength, regularizeOpts);
@@ -239,7 +250,7 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
         secondPassWeights, { fast: false }
       );
       reg.geometry.dispose();
-      if (mode === 'bake') {
+      if (needParentId) {
         const composed = new Int32Array(resubParents.length);
         for (let i = 0; i < resubParents.length; i++) {
           composed[i] = reg.faceParentId[resubParents[i]];
@@ -249,6 +260,20 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
       subdivided = resub;
     }
     if (shouldAbort()) return null;
+
+    // CAD-face-native pattern UV: reconstruct the phase-stitched per-vertex
+    // (u,v) attribute now, while faceParentId still lines up with `subdivided`
+    // — displacement.js samples it directly instead of the procedural
+    // projection when settings.mappingMode is MODE_STEP_FACE_UV.
+    if (wantStepUV) {
+      const { faceOfTri, uv } = input.stepUV;
+      const uvIndex = buildFaceUVIndex(faceOfTri, input.positions, uv);
+      const facePhase = computeFacePhaseOffsets(uvIndex, settings.scaleU, settings.scaleV);
+      const patternUV = reconstructStepPatternUV(
+        subdivided.attributes.position.array, faceParentId, input.positions, faceOfTri, uv, facePhase
+      );
+      subdivided.setAttribute('stepUV', new THREE.BufferAttribute(patternUV, 2));
+    }
 
     const subTriCount = subdivided.attributes.position.count / 3;
     onEvent('displace', 0, { triCount: subTriCount });

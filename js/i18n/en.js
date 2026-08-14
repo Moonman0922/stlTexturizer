@@ -43,6 +43,8 @@ export default {
   "projection.planarXY": "Planar XY",
   "projection.planarXZ": "Planar XZ",
   "projection.planarYZ": "Planar YZ",
+  "projection.stepFaceUv": "CAD Face UV (STEP)",
+  "hints.stepUvExportOnly": "Uses each CAD face's true surface UV, stitched across face boundaries. Applied on Export/Bake only — the live 3D preview shows an approximate projection.",
   "sections.transform": "Transform",
   "labels.textureSizeU": "Size U (mm)",
   "labels.textureSizeV": "Size V (mm)",

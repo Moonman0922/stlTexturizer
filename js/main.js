@@ -327,6 +327,8 @@ const rotateApplyBtn   = document.getElementById('rotate-apply-btn');
 const rotateResetBtn   = document.getElementById('rotate-reset-btn');
 
 const mappingSelect   = document.getElementById('mapping-mode');
+const stepUvModeOption = document.getElementById('mapping-mode-step-uv');
+const stepUvHint       = document.getElementById('step-uv-hint');
 const scaleUSlider    = document.getElementById('scale-u');
 const scaleVSlider    = document.getElementById('scale-v');
 const lockScaleBtn    = document.getElementById('lock-scale');
@@ -1451,6 +1453,7 @@ function wireEvents() {
   mappingSelect.addEventListener('change', () => {
     settings.mappingMode = parseInt(mappingSelect.value, 10);
     capAngleRow.style.display = settings.mappingMode === 3 ? '' : 'none';
+    stepUvHint.classList.toggle('hidden', settings.mappingMode !== 7 /* MODE_STEP_FACE_UV */);
     updateCylinderUIVisibility();
     // The wrap circumference is mode-specific (cylinder vs sphere equator),
     // so entering a wrap mode with snapping on re-snaps the U scale.
@@ -2114,6 +2117,25 @@ function updateStepFaceUIVisibility() {
     if (selectionBasis === 'step') setSelectionBasis('mesh');
     if (compareViewEnabled) setCompareViewEnabled(false);
   }
+}
+
+/**
+ * Show/hide the "CAD Face UV" projection option based on whether the current
+ * model has STEP per-face UV data (js/stepFaceUV.js), and fall back to the
+ * default projection when it doesn't — a freshly loaded non-STEP model, a
+ * STEP model from a meshStep build that predates parameterUVs, or a STEP
+ * model's mesh that got re-authored by baking (same triggers as
+ * updateStepFaceUIVisibility, called alongside it everywhere).
+ */
+function updateStepUvModeAvailability() {
+  const available = !!(stepFaceData && stepFaceData.uv);
+  stepUvModeOption.hidden = !available;
+  stepUvModeOption.disabled = !available;
+  if (!available && settings.mappingMode === 7 /* MODE_STEP_FACE_UV */) {
+    settings.mappingMode = 5 /* MODE_TRIPLANAR */;
+    mappingSelect.value = '5';
+  }
+  stepUvHint.classList.toggle('hidden', settings.mappingMode !== 7 /* MODE_STEP_FACE_UV */);
 }
 
 /** Turn the split-view comparison pane (Mode B) on/off. */
@@ -3482,11 +3504,12 @@ async function handleModelFile(file, stepSettings = null) {
     stepFaceIndex = null;
     setCompareViewEnabled(false);
     if (step && step.faceOfTri) {
-      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces };
+      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces, uv: step.uv || null };
       stepFaceIndex = buildFaceIndex(step.faceOfTri);
     }
     setSelectionBasis('mesh', { force: true });
     updateStepFaceUIVisibility();
+    updateStepUvModeAvailability();
 
     // Carry scale, offset, rotation, and all other tuning across model swaps —
     // they're normalized to the bounding box so they apply meaningfully to the
@@ -5041,6 +5064,9 @@ async function handleExport(format = 'stl') {
       bounds: currentBounds,
       regularizeOpts: _regularizeOpts(),
       mode: 'export',
+      stepUV: (stepFaceData && stepFaceData.uv)
+        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv }
+        : null,
     }, _onExportPipelineEvent, isStale);
     if (!result || isStale()) return;
 
@@ -5342,6 +5368,9 @@ async function bakeTextures() {
       bounds: currentBounds,
       regularizeOpts: _regularizeOpts(),
       mode: 'bake',
+      stepUV: (stepFaceData && stepFaceData.uv)
+        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv }
+        : null,
     }, _onBakePipelineEvent, () => false);
     if (!result) throw new Error('bake pipeline aborted');
 
@@ -5435,6 +5464,7 @@ function adoptBakedGeometry(geometry, bounds, opts = {}) {
   setCompareViewEnabled(false);
   setSelectionBasis('mesh', { force: true });
   updateStepFaceUIVisibility();
+  updateStepUvModeAvailability();
 
   geometry = currentGeometry;
 
@@ -5635,6 +5665,10 @@ function applySettingsSnapshot(snap) {
   if (snap.mappingMode != null) {
     mappingSelect.value = String(snap.mappingMode);
     mappingSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    // A snapshot saved against a different (STEP) model may restore mode 7
+    // onto a model with no STEP UV data — fall back rather than silently
+    // exporting with a disabled/unavailable projection selected.
+    updateStepUvModeAvailability();
   }
 
   // invertDisplacement BEFORE amplitude — the amplitude setter reads the flag.

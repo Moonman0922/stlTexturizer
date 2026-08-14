@@ -55,6 +55,11 @@ export function resolveStepSettings(auto, settings) {
  * — no soup expansion needed, they line up with soupPos/soupNrm triangle for
  * triangle. This is the link that lets the app later select a whole CAD
  * surface instead of painting triangles by hand.
+ *
+ * `uv` (present when `parameterUVs` was requested) is likewise already a
+ * per-triangle-CORNER array (2 floats/corner, 6/triangle) aligned with
+ * `mesh.indices` — i.e. the exact same expansion order used to build
+ * soupPos/soupNrm above — so it also passes straight through unexpanded.
  */
 export function stepResultToSoup(r) {
   const idx      = r.mesh.indices;
@@ -80,6 +85,7 @@ export function stepResultToSoup(r) {
     triCount,
     faceOfTri:  r.faceOfTri  || null,
     solidOfTri: r.solidOfTri || null,
+    uv:         r.uv         || null,
   };
 }
 

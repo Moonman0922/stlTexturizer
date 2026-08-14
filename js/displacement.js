@@ -4,7 +4,7 @@
  */
 
 import { THREE } from './threeCompat.js';
-import { computeUV, getDominantCubicAxis, getCubicBlendWeights, scaleMmToRelative } from './mapping.js';
+import { computeUV, getDominantCubicAxis, getCubicBlendWeights, scaleMmToRelative, MODE_STEP_FACE_UV } from './mapping.js';
 import { QuantizedPointMap } from './meshIndex.js';
 
 /**
@@ -124,6 +124,14 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
   // Displacement cache: one sample per unique vertex (replaces dispCache Map)
   const dispCacheVal = new Float64Array(uniqueCount);
   const dispCacheSet = new Uint8Array(uniqueCount);
+
+  // CAD-face-native UV (see js/stepFaceUV.js): a per-vertex (u,v) attribute
+  // pre-computed by exportPipeline.js — already phase-stitched across face
+  // boundaries and scaled to tile units, so Pass 2 just fract-samples it
+  // directly instead of calling computeUV. NaN entries (parent face had no
+  // usable analytic UV) fall back to the normal procedural projection so a
+  // few problem faces don't leave bare untextured patches.
+  const stepUVAttr = settings.mappingMode === MODE_STEP_FACE_UV ? (geometry.attributes.stepUV || null) : null;
 
   for (let t = 0; t < count; t += 3) {
     vA.fromBufferAttribute(posAttr, t);
@@ -428,6 +436,16 @@ export function applyDisplacement(geometry, imageData, imgWidth, imgHeight, sett
     dispCacheSet[vid] = 1;
 
     tmpPos.fromBufferAttribute(posAttr, i);
+
+    if (stepUVAttr) {
+      const su = stepUVAttr.getX(i), sv = stepUVAttr.getY(i);
+      if (isFinite(su) && isFinite(sv)) {
+        dispCacheVal[vid] = sampleBilinear(imageData.data, imgWidth, imgHeight, su, sv);
+        continue;
+      }
+      // NaN (parent face had no usable analytic UV) — fall through to the
+      // normal procedural projection below so this vertex still gets textured.
+    }
 
     // Cubic: derive blend weights from the *smooth* per-vertex normal so that
     // adjacent vertices on a curved region (small fillets, rolled edges) see
