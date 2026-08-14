@@ -156,6 +156,11 @@ const settings = {
   // multiple of refineLength.  Always on with these standard values — the
   // knobs here mirror regularize.js opts; second-pass cap is for the
   // post-regularize subdivide step in main.js.
+  // CAD Face UV mode (see js/stepFaceUV.js): whether a periodic CAD face
+  // (a full cylinder/torus) snaps its tile size so its own internal wrap
+  // seam lands on a tile boundary. Off = every face uses your exact
+  // requested size, but wrapping faces may show a visible pattern jump.
+  stepUvSnapPeriodic:       true,
   regularizeEnabled:        true,
   regularizeAspectThreshold: 5,
   regularizeSlack:           3.0,
@@ -329,6 +334,8 @@ const rotateResetBtn   = document.getElementById('rotate-reset-btn');
 const mappingSelect   = document.getElementById('mapping-mode');
 const stepUvModeOption = document.getElementById('mapping-mode-step-uv');
 const stepUvHint       = document.getElementById('step-uv-hint');
+const stepUvSnapSection = document.getElementById('step-uv-snap-section');
+const stepUvSnapChk     = document.getElementById('step-uv-snap-chk');
 const scaleUSlider    = document.getElementById('scale-u');
 const scaleVSlider    = document.getElementById('scale-v');
 const lockScaleBtn    = document.getElementById('lock-scale');
@@ -1604,6 +1611,12 @@ function wireEvents() {
     // Export/bake-time flag only — no preview rebuild needed.
   });
 
+  stepUvSnapChk.checked = settings.stepUvSnapPeriodic;
+  stepUvSnapChk.addEventListener('change', () => {
+    settings.stepUvSnapPeriodic = stepUvSnapChk.checked;
+    // Export/bake-time flag only — no preview rebuild needed.
+  });
+
   dispPreviewToggle.addEventListener('change', () => {
     toggleDisplacementPreview(dispPreviewToggle.checked);
   });
@@ -2139,6 +2152,7 @@ function updateStepUvModeAvailability() {
   const available = !!(stepFaceData && stepFaceData.uv);
   stepUvModeOption.hidden = !available;
   stepUvModeOption.disabled = !available;
+  stepUvSnapSection.classList.toggle('hidden', !available);
   if (!available && settings.mappingMode === 7 /* MODE_STEP_FACE_UV */) {
     settings.mappingMode = 5 /* MODE_TRIPLANAR */;
     mappingSelect.value = '5';
@@ -5604,6 +5618,7 @@ const PERSISTED_KEYS = [
   'offsetU', 'offsetV', 'rotation',
   'amplitude', 'textureHeight', 'invertDisplacement',
   'symmetricDisplacement', 'noDownwardZ', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
+  'stepUvSnapPeriodic',
   'mappingBlend', 'seamBandWidth', 'capAngle', 'boundaryFalloff', 'boundaryFalloffCurve',
   'bottomAngleLimit', 'topAngleLimit',
   'refineLength', 'maxTriangles',
@@ -5754,6 +5769,10 @@ function applySettingsSnapshot(snap) {
     preserveUntexturedChk.checked = snap.preserveUntextured;
     preserveUntexturedChk.dispatchEvent(new Event('change', { bubbles: true }));
   }
+  if (snap.stepUvSnapPeriodic != null) {
+    stepUvSnapChk.checked = snap.stepUvSnapPeriodic;
+    stepUvSnapChk.dispatchEvent(new Event('change', { bubbles: true }));
+  }
 
   // Cylindrical-mode state. cylinderCenterX/Y/radius pass through unchanged
   // (null is meaningful — falls back to AABB defaults during projection).
@@ -5841,6 +5860,7 @@ const DEFAULT_SETTINGS_SNAPSHOT = Object.freeze({
   offsetU: 0, offsetV: 0, rotation: 0,
   amplitude: 0.5, textureHeight: 0.5, invertDisplacement: false,
   symmetricDisplacement: false, noDownwardZ: false, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
+  stepUvSnapPeriodic: true,
   mappingBlend: 1, seamBandWidth: 0.5, capAngle: 20, boundaryFalloff: 0,
   boundaryFalloffCurve: 'ease',
   bottomAngleLimit: 5, topAngleLimit: 0,

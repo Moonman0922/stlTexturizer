@@ -592,6 +592,17 @@
             </label>
           </div>
 
+          <div id="step-uv-snap-section" class="hidden">
+            <h3 class="panel-subsection-heading" data-i18n="ui.stepUvSnapHeading">CAD Face UV Periodic Snap</h3>
+            <p class="advanced-blurb" data-i18n="ui.stepUvSnapDesc">A CAD face that wraps fully around itself (a full cylinder, a torus) has an internal seam where the pattern can jump. When on, each such face's tile size is nudged to the nearest value that divides its own wrap evenly, at the cost of a slightly different effective tile size from face to face. When off, all faces use your exact requested size, but wrapping faces may show a seam.</p>
+            <div class="form-row">
+              <label class="checkbox-label" for="step-uv-snap-chk">
+                <input type="checkbox" id="step-uv-snap-chk" checked />
+                <span data-i18n="ui.stepUvSnap">Snap tile size to close periodic-face seams</span>
+              </label>
+            </div>
+          </div>
+
           <h3 class="panel-subsection-heading" data-i18n="ui.bakeTexturesHeading">Bake Textures</h3>
           <p class="advanced-blurb" data-i18n="ui.bakeTexturesDesc">Apply the current texture to the mesh and reload the result as the working model so you can keep editing.</p>
           <div class="form-row bake-mask-row">

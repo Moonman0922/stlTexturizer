@@ -268,7 +268,8 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
     if (wantStepUV) {
       const { faceOfTri, uv, faceUV } = input.stepUV;
       const uvIndex = buildFaceUVIndex(faceOfTri, input.positions, uv);
-      const facePhase = computeFacePhaseOffsets(uvIndex, settings.scaleU, settings.scaleV, faceUV || null);
+      const snapPeriodic = settings.stepUvSnapPeriodic !== false;
+      const facePhase = computeFacePhaseOffsets(uvIndex, settings.scaleU, settings.scaleV, snapPeriodic ? (faceUV || null) : null);
       const patternUV = reconstructStepPatternUV(
         subdivided.attributes.position.array, faceParentId, input.positions, faceOfTri, uv, facePhase
       );

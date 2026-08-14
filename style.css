@@ -563,6 +563,8 @@ main {
   margin-top: 6px;
 }
 
+#step-uv-snap-section.hidden { display: none; }
+
 .bake-mask-row {
   margin-bottom: 10px;
 }
