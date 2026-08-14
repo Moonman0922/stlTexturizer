@@ -2087,7 +2087,15 @@ function updateMaskModeButtons() {
 // — this only changes what one click adds to it and how the tool row looks.
 function setSelectionBasis(basis, { force = false } = {}) {
   if (basis === 'step' && !stepFaceData) return;
-  if (!force && selectionBasis === basis) return;
+  if (!force && selectionBasis === basis) {
+    // The basis didn't change, but the underlying tool can have been
+    // force-deactivated by something outside this toggle (3D preview,
+    // precision masking, Escape) without touching selectionBasis — clicking
+    // an already-"selected" STEP-face button would otherwise silently no-op
+    // forever, looking active while doing nothing on click.
+    if (basis === 'step' && exclusionTool !== 'stepFace') setExclusionTool('stepFace');
+    return;
+  }
   selectionBasis = basis;
   exclBasisMeshBtn.classList.toggle('active', basis === 'mesh');
   exclBasisStepBtn.classList.toggle('active', basis === 'step');
