@@ -3512,7 +3512,7 @@ async function handleModelFile(file, stepSettings = null) {
     stepFaceIndex = null;
     setCompareViewEnabled(false);
     if (step && step.faceOfTri) {
-      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces, uv: step.uv || null };
+      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces, uv: step.uv || null, faceUV: step.faceUV || null };
       stepFaceIndex = buildFaceIndex(step.faceOfTri);
     }
     setSelectionBasis('mesh', { force: true });
@@ -5073,7 +5073,7 @@ async function handleExport(format = 'stl') {
       regularizeOpts: _regularizeOpts(),
       mode: 'export',
       stepUV: (stepFaceData && stepFaceData.uv)
-        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv }
+        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV }
         : null,
     }, _onExportPipelineEvent, isStale);
     if (!result || isStale()) return;
@@ -5377,7 +5377,7 @@ async function bakeTextures() {
       regularizeOpts: _regularizeOpts(),
       mode: 'bake',
       stepUV: (stepFaceData && stepFaceData.uv)
-        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv }
+        ? { faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV }
         : null,
     }, _onBakePipelineEvent, () => false);
     if (!result) throw new Error('bake pipeline aborted');

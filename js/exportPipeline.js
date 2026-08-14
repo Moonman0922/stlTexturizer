@@ -266,9 +266,9 @@ export async function runExportPipeline(input, onEvent = () => {}, shouldAbort =
     // — displacement.js samples it directly instead of the procedural
     // projection when settings.mappingMode is MODE_STEP_FACE_UV.
     if (wantStepUV) {
-      const { faceOfTri, uv } = input.stepUV;
+      const { faceOfTri, uv, faceUV } = input.stepUV;
       const uvIndex = buildFaceUVIndex(faceOfTri, input.positions, uv);
-      const facePhase = computeFacePhaseOffsets(uvIndex, settings.scaleU, settings.scaleV);
+      const facePhase = computeFacePhaseOffsets(uvIndex, settings.scaleU, settings.scaleV, faceUV || null);
       const patternUV = reconstructStepPatternUV(
         subdivided.attributes.position.array, faceParentId, input.positions, faceOfTri, uv, facePhase
       );

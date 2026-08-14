@@ -194,20 +194,46 @@ export function buildFaceUVIndex(faceOfTri, positions, uv) {
  * the face-adjacency graph. Faces with no valid UV data (not in
  * uvIndex.metricScale) are omitted from the result.
  *
+ * PERIODIC SNAP: a face that wraps on itself (a cylinder's full azimuth, a
+ * torus's tube) has an internal seam of its own — meshStep only guarantees
+ * one TRIANGLE's 3 corners stay numerically consistent across that seam
+ * (see the module doc on `uv`), not that the whole face's u stays a single
+ * continuous number all the way around. Left alone, the raw tile size would
+ * make the pattern jump by a fractional tile right at that seam — visible as
+ * two overlapping copies of the pattern within what looks like one
+ * continuous surface. When meshStep reports a period for a direction
+ * (`faceUV`, present when parameterUVs found the face closes up), snap that
+ * direction's tile size to the nearest value that divides the FULL period
+ * into a whole number of tiles, so the wrap is seamless by construction —
+ * the same trick settings.snapSeamlessWrap already uses for the app's
+ * built-in Cylindrical projection mode.
+ *
  * @param {ReturnType<typeof buildFaceUVIndex>} uvIndex
  * @param {number} scaleU_mm  absolute tile size, U (settings.scaleU)
  * @param {number} scaleV_mm  absolute tile size, V (settings.scaleV)
+ * @param {Map<number,{uPeriod?:number,vPeriod?:number}>} [faceUV]  meshStep's
+ *   per-face period info (step.faceUV) — omit to skip periodic snapping.
  * @returns {Map<number, {tileU:number, tileV:number, offsetU:number, offsetV:number}>}
  */
-export function computeFacePhaseOffsets(uvIndex, scaleU_mm, scaleV_mm) {
+export function computeFacePhaseOffsets(uvIndex, scaleU_mm, scaleV_mm, faceUV = null) {
   const { metricScale, adjacency } = uvIndex;
   const phase = new Map();
   const tileOf = (fid) => {
     const m = metricScale.get(fid);
-    return {
-      tileU: Math.max(scaleU_mm / Math.max(m.mmPerU, 1e-9), 1e-9),
-      tileV: Math.max(scaleV_mm / Math.max(m.mmPerV, 1e-9), 1e-9),
-    };
+    let tileU = Math.max(scaleU_mm / Math.max(m.mmPerU, 1e-9), 1e-9);
+    let tileV = Math.max(scaleV_mm / Math.max(m.mmPerV, 1e-9), 1e-9);
+    const fuv = faceUV && faceUV.get(fid);
+    if (fuv && fuv.uPeriod) {
+      const worldPeriod = fuv.uPeriod * m.mmPerU; // physical circumference, mm
+      const tiles = Math.max(1, Math.round(worldPeriod / scaleU_mm));
+      tileU = fuv.uPeriod / tiles;
+    }
+    if (fuv && fuv.vPeriod) {
+      const worldPeriod = fuv.vPeriod * m.mmPerV;
+      const tiles = Math.max(1, Math.round(worldPeriod / scaleV_mm));
+      tileV = fuv.vPeriod / tiles;
+    }
+    return { tileU, tileV };
   };
 
   // Adjacency list per face, in tile units (computed once tiles are known).
