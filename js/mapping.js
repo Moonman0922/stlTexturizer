@@ -16,6 +16,14 @@ export const MODE_CYLINDRICAL = 3;
 export const MODE_SPHERICAL   = 4;
 export const MODE_TRIPLANAR   = 5;
 export const MODE_CUBIC       = 6;
+// CAD-face-native UV (see js/stepFaceUV.js) — tiles the pattern using each
+// STEP B-rep face's own analytic parametrization, phase-aligned across face
+// boundaries. Export/bake-only: computeUV() below has no per-vertex UV
+// attribute to sample, so this mode falls through to the MODE_TRIPLANAR
+// default there and only the exported/baked mesh gets the true CAD-native
+// pattern. displacement.js branches around computeUV entirely for this mode
+// when the geometry carries a `stepUV` attribute.
+export const MODE_STEP_FACE_UV = 7;
 
 const TWO_PI = Math.PI * 2;
 

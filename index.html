@@ -272,8 +272,10 @@
             <option value="0" data-i18n-opt="projection.planarXY">Planar XY</option>
             <option value="1" data-i18n-opt="projection.planarXZ">Planar XZ</option>
             <option value="2" data-i18n-opt="projection.planarYZ">Planar YZ</option>
+            <option value="7" id="mapping-mode-step-uv" hidden disabled data-i18n-opt="projection.stepFaceUv">CAD Face UV (STEP)</option>
           </select>
         </div>
+        <div class="form-row hint hidden" id="step-uv-hint" data-i18n="hints.stepUvExportOnly">Uses each CAD face's true surface UV, stitched across face boundaries. Applied on Export/Bake only — the live 3D preview shows an approximate projection.</div>
         <div class="form-row slider-row" style="display:none">
           <label for="seam-blend" data-i18n="labels.seamBlend" data-i18n-title="tooltips.seamBlend" title="Softens the hard seam where projection faces meet. Effective for Cubic and Cylindrical modes.">Seam Blend â“˜</label>
           <input type="range" id="seam-blend" min="0" max="1" step="0.01" value="1" />
@@ -588,6 +590,27 @@
               <input type="checkbox" id="preserve-untextured-chk" checked />
               <span data-i18n="ui.preserveUntextured">Don't modify untextured surfaces</span>
             </label>
+          </div>
+
+          <div id="step-uv-snap-section" class="hidden">
+            <h3 class="panel-subsection-heading" data-i18n="ui.stepUvSnapHeading">CAD Face UV Periodic Snap</h3>
+            <p class="advanced-blurb" data-i18n="ui.stepUvSnapDesc">A CAD face that wraps fully around itself (a full cylinder, a torus) has an internal seam where the pattern can jump. When on, each such face's tile size is nudged to the nearest value that divides its own wrap evenly, at the cost of a slightly different effective tile size from face to face. When off, all faces use your exact requested size, but wrapping faces may show a seam.</p>
+            <div class="form-row">
+              <label class="checkbox-label" for="step-uv-snap-chk">
+                <input type="checkbox" id="step-uv-snap-chk" checked />
+                <span data-i18n="ui.stepUvSnap">Snap tile size to close periodic-face seams</span>
+              </label>
+            </div>
+          </div>
+
+          <div id="step-uv-anchor-section" class="hidden">
+            <h3 class="panel-subsection-heading" data-i18n="ui.stepUvAnchorHeading">CAD Face UV Pattern Anchor</h3>
+            <p class="advanced-blurb" data-i18n="ui.stepUvAnchorDesc">Pick two boundary faces (e.g. the flat sides bordering a curved patch). The pattern on the textured faces between them is snapped so a whole number of tiles fits exactly, with matching phase at both ends — useful for a span that doesn't wrap on itself but should still start and end cleanly.</p>
+            <div class="form-row">
+              <button id="step-uv-anchor-pick-btn" class="excl-tool-btn" data-i18n="ui.stepUvAnchorPick" data-i18n-title="tooltips.stepUvAnchorPick" title="Click this, then click two boundary faces in the viewport.">Pick Anchor Faces</button>
+              <button id="step-uv-anchor-clear-btn" class="excl-clear-btn" data-i18n="ui.stepUvAnchorClear">Clear</button>
+            </div>
+            <p id="step-uv-anchor-status" class="excl-hint" data-i18n="ui.stepUvAnchorNone">No anchor set — pattern uses its normal automatic phase alignment.</p>
           </div>
 
           <h3 class="panel-subsection-heading" data-i18n="ui.bakeTexturesHeading">Bake Textures</h3>

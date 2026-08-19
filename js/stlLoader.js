@@ -57,12 +57,21 @@ export function loadSTLFile(file) {
  * unchanged (only entries up to the returned triCount stay meaningful —
  * callers slice() if they need an exact-length copy).
  *
+ * Each entry is either a bare typed array (one entry per triangle, stride 1
+ * — faceOfTri/solidOfTri) or `{ array, stride }` for per-triangle data with
+ * more than one value each — e.g. meshStep's per-corner `uv` (stride 6: 2
+ * floats × 3 corners).
+ *
  * Returns { nanCount, degenerateCount } so callers can warn the user.
  */
 function validateAndCleanGeometry(geometry, companionArrays = []) {
   const pos  = geometry.attributes.position;
   const src  = pos.array;           // Float32Array, 9 floats per triangle
   const triCount = src.length / 9;
+
+  const companions = companionArrays.map(c => (
+    (c && typeof c === 'object' && 'array' in c) ? c : { array: c, stride: 1 }
+  ));
 
   let writeIdx = 0;    // float write cursor into src (9 per kept triangle)
   let writeTri = 0;    // triangle write cursor into companionArrays (1 per kept triangle)
@@ -96,8 +105,11 @@ function validateAndCleanGeometry(geometry, companionArrays = []) {
       src[writeIdx+3] = bx; src[writeIdx+4] = by; src[writeIdx+5] = bz;
       src[writeIdx+6] = cx; src[writeIdx+7] = cy; src[writeIdx+8] = cz;
     }
-    for (const arr of companionArrays) {
-      if (writeTri !== t) arr[writeTri] = arr[t];
+    if (writeTri !== t) {
+      for (const { array, stride } of companions) {
+        const dst = writeTri * stride, src2 = t * stride;
+        for (let k = 0; k < stride; k++) array[dst + k] = array[src2 + k];
+      }
     }
     writeIdx += 9;
     writeTri++;

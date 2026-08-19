@@ -99,6 +99,15 @@ let stepFaceIndex      = null;   // Map<faceId, Set<triIdx>> from buildFaceIndex
 let selectionBasis      = 'mesh'; // 'mesh' | 'step' — which picking method the exclusion tools use
 let compareViewEnabled  = false;  // split-view "AB test" pane on/off
 
+// CAD Face UV pattern-anchor picking (js/stepFaceUV.js's resolveAnchorSpan):
+// two user-picked boundary faces that pin a repeating pattern to divide
+// evenly, with matching start/end phase, across whatever textured faces
+// connect them (a curved patch between two flat sides, e.g.). Reset
+// alongside stepFaceData everywhere that resets it.
+let stepUvAnchorPickActive = false;   // true while the next click(s) set an anchor face
+let stepUvAnchorFaceA      = null;    // STEP face id | null
+let stepUvAnchorFaceB      = null;    // STEP face id | null
+
 const settings = {
   mappingMode:   5,     // Triplanar default
   // Texture tile size in ABSOLUTE millimetres (one full repeat along U/V).
@@ -156,6 +165,11 @@ const settings = {
   // multiple of refineLength.  Always on with these standard values — the
   // knobs here mirror regularize.js opts; second-pass cap is for the
   // post-regularize subdivide step in main.js.
+  // CAD Face UV mode (see js/stepFaceUV.js): whether a periodic CAD face
+  // (a full cylinder/torus) snaps its tile size so its own internal wrap
+  // seam lands on a tile boundary. Off = every face uses your exact
+  // requested size, but wrapping faces may show a visible pattern jump.
+  stepUvSnapPeriodic:       true,
   regularizeEnabled:        true,
   regularizeAspectThreshold: 5,
   regularizeSlack:           3.0,
@@ -327,6 +341,14 @@ const rotateApplyBtn   = document.getElementById('rotate-apply-btn');
 const rotateResetBtn   = document.getElementById('rotate-reset-btn');
 
 const mappingSelect   = document.getElementById('mapping-mode');
+const stepUvModeOption = document.getElementById('mapping-mode-step-uv');
+const stepUvHint       = document.getElementById('step-uv-hint');
+const stepUvSnapSection = document.getElementById('step-uv-snap-section');
+const stepUvSnapChk     = document.getElementById('step-uv-snap-chk');
+const stepUvAnchorSection  = document.getElementById('step-uv-anchor-section');
+const stepUvAnchorPickBtn  = document.getElementById('step-uv-anchor-pick-btn');
+const stepUvAnchorClearBtn = document.getElementById('step-uv-anchor-clear-btn');
+const stepUvAnchorStatus   = document.getElementById('step-uv-anchor-status');
 const scaleUSlider    = document.getElementById('scale-u');
 const scaleVSlider    = document.getElementById('scale-v');
 const lockScaleBtn    = document.getElementById('lock-scale');
@@ -1451,6 +1473,7 @@ function wireEvents() {
   mappingSelect.addEventListener('change', () => {
     settings.mappingMode = parseInt(mappingSelect.value, 10);
     capAngleRow.style.display = settings.mappingMode === 3 ? '' : 'none';
+    stepUvHint.classList.toggle('hidden', settings.mappingMode !== 7 /* MODE_STEP_FACE_UV */);
     updateCylinderUIVisibility();
     // The wrap circumference is mode-specific (cylinder vs sphere equator),
     // so entering a wrap mode with snapping on re-snaps the U scale.
@@ -1598,6 +1621,12 @@ function wireEvents() {
   preserveUntexturedChk.checked = settings.preserveUntextured;
   preserveUntexturedChk.addEventListener('change', () => {
     settings.preserveUntextured = preserveUntexturedChk.checked;
+    // Export/bake-time flag only — no preview rebuild needed.
+  });
+
+  stepUvSnapChk.checked = settings.stepUvSnapPeriodic;
+  stepUvSnapChk.addEventListener('change', () => {
+    settings.stepUvSnapPeriodic = stepUvSnapChk.checked;
     // Export/bake-time flag only — no preview rebuild needed.
   });
 
@@ -1829,6 +1858,14 @@ function wireEvents() {
     setCompareViewEnabled(compareViewToggle.checked);
   });
 
+  stepUvAnchorPickBtn.addEventListener('click', () => toggleStepUvAnchorPick(!stepUvAnchorPickActive));
+  stepUvAnchorClearBtn.addEventListener('click', () => {
+    stepUvAnchorFaceA = null;
+    stepUvAnchorFaceB = null;
+    if (stepUvAnchorPickActive) toggleStepUvAnchorPick(false);
+    updateStepUvAnchorStatus();
+  });
+
   // ── Precision masking wiring ──────────────────────────────────────────────
   precisionMaskingToggle.addEventListener('change', () => {
     togglePrecisionMasking(precisionMaskingToggle.checked);
@@ -1848,6 +1885,13 @@ function wireEvents() {
     if (placeOnFaceActive) {
       e.preventDefault();
       handlePlaceOnFaceClick(e);
+      return;
+    }
+
+    // CAD Face UV pattern-anchor picking
+    if (stepUvAnchorPickActive) {
+      e.preventDefault();
+      handleStepUvAnchorClick(e);
       return;
     }
 
@@ -2045,6 +2089,30 @@ function wireEvents() {
 
 // ── Exclusion helpers ─────────────────────────────────────────────────────────
 
+/**
+ * CAD face ids that will actually receive texture under the current
+ * exclude/include-only mask — the `allowedFaces` the pattern-anchor
+ * pathfinder (js/stepFaceUV.js's resolveAnchorSpan) is restricted to walk
+ * through. Best-effort: a face counts as "textured" if any of its
+ * triangles are — exact for STEP-face-basis painting (whole faces at a
+ * time), an approximation for brush/bucket painting that only covers part
+ * of a face.
+ */
+function _currentTexturedStepFaceIds() {
+  if (!stepFaceData) return [];
+  const { faceOfTri } = stepFaceData;
+  const triCount = faceOfTri.length;
+  const ids = new Set();
+  if (selectionMode) {
+    // Include-only: excludedFaces holds the INCLUDED triangle indices.
+    for (const t of excludedFaces) if (t < triCount) ids.add(faceOfTri[t]);
+  } else {
+    // Exclude mode: every triangle NOT in excludedFaces is textured.
+    for (let t = 0; t < triCount; t++) if (!excludedFaces.has(t)) ids.add(faceOfTri[t]);
+  }
+  return [...ids];
+}
+
 function setSelectionMode(include) {
   if (selectionMode === include) return;
   selectionMode = include;
@@ -2121,6 +2189,87 @@ function updateStepFaceUIVisibility() {
   if (!available) {
     if (selectionBasis === 'step') setSelectionBasis('mesh');
     if (compareViewEnabled) setCompareViewEnabled(false);
+  }
+}
+
+/**
+ * Show/hide the "CAD Face UV" projection option based on whether the current
+ * model has STEP per-face UV data (js/stepFaceUV.js), and fall back to the
+ * default projection when it doesn't — a freshly loaded non-STEP model, a
+ * STEP model from a meshStep build that predates parameterUVs, or a STEP
+ * model's mesh that got re-authored by baking (same triggers as
+ * updateStepFaceUIVisibility, called alongside it everywhere).
+ */
+function updateStepUvModeAvailability() {
+  const available = !!(stepFaceData && stepFaceData.uv);
+  stepUvModeOption.hidden = !available;
+  stepUvModeOption.disabled = !available;
+  stepUvSnapSection.classList.toggle('hidden', !available);
+  if (!available && settings.mappingMode === 7 /* MODE_STEP_FACE_UV */) {
+    settings.mappingMode = 5 /* MODE_TRIPLANAR */;
+    mappingSelect.value = '5';
+  }
+  stepUvHint.classList.toggle('hidden', settings.mappingMode !== 7 /* MODE_STEP_FACE_UV */);
+  stepUvAnchorSection.classList.toggle('hidden', !available);
+  // Always reset — even when the new model still has STEP UV data, the
+  // previous model's face ids don't mean anything for this one.
+  stepUvAnchorFaceA = null;
+  stepUvAnchorFaceB = null;
+  if (stepUvAnchorPickActive) toggleStepUvAnchorPick(false);
+  updateStepUvAnchorStatus();
+}
+
+/**
+ * Toggle the "pick pattern anchor faces" tool (js/stepFaceUV.js's
+ * resolveAnchorSpan). Independent of the exclusion-tool state machine —
+ * like Place on Face, this needs whole-face clicks but writes to
+ * stepUvAnchorFaceA/B instead of excludedFaces, so it can't just reuse the
+ * existing 'stepFace' exclusion tool.
+ */
+function toggleStepUvAnchorPick(active) {
+  stepUvAnchorPickActive = active;
+  stepUvAnchorPickBtn.classList.toggle('active', active);
+  if (active) {
+    if (exclusionTool) setExclusionTool(null);
+    if (placeOnFaceActive) togglePlaceOnFace(false);
+    if (rotateActive) toggleRotateMode(false);
+    canvas.style.cursor = 'crosshair';
+  } else if (!exclusionTool) {
+    canvas.style.cursor = '';
+  }
+  updateStepUvAnchorStatus();
+}
+
+/** Handle a click while stepUvAnchorPickActive: fills A, then B, then starts over. */
+function handleStepUvAnchorClick(e) {
+  const triIdx = pickTriangle(e);
+  if (triIdx < 0 || !stepFaceData) return;
+  const faceId = stepFaceData.faceOfTri[triIdx];
+  if (stepUvAnchorFaceA == null) {
+    stepUvAnchorFaceA = faceId;
+  } else if (stepUvAnchorFaceB == null && faceId !== stepUvAnchorFaceA) {
+    stepUvAnchorFaceB = faceId;
+    toggleStepUvAnchorPick(false); // both set — done
+  } else {
+    // Both already set, or the same face clicked twice — start a fresh pick.
+    stepUvAnchorFaceA = faceId;
+    stepUvAnchorFaceB = null;
+  }
+  updateStepUvAnchorStatus();
+}
+
+function updateStepUvAnchorStatus() {
+  const faces = stepFaceData && stepFaceData.faces;
+  if (stepUvAnchorFaceA == null) {
+    stepUvAnchorStatus.textContent = stepUvAnchorPickActive
+      ? t('ui.stepUvAnchorPickingA')
+      : t('ui.stepUvAnchorNone');
+  } else if (stepUvAnchorFaceB == null) {
+    stepUvAnchorStatus.textContent = t('ui.stepUvAnchorPickingB', { a: describeFace(stepUvAnchorFaceA, faces) });
+  } else {
+    stepUvAnchorStatus.textContent = t('ui.stepUvAnchorSet', {
+      a: describeFace(stepUvAnchorFaceA, faces), b: describeFace(stepUvAnchorFaceB, faces),
+    });
   }
 }
 
@@ -3490,11 +3639,12 @@ async function handleModelFile(file, stepSettings = null) {
     stepFaceIndex = null;
     setCompareViewEnabled(false);
     if (step && step.faceOfTri) {
-      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces };
+      stepFaceData  = { faceOfTri: step.faceOfTri, faces: step.faces, uv: step.uv || null, faceUV: step.faceUV || null };
       stepFaceIndex = buildFaceIndex(step.faceOfTri);
     }
     setSelectionBasis('mesh', { force: true });
     updateStepFaceUIVisibility();
+    updateStepUvModeAvailability();
 
     // Carry scale, offset, rotation, and all other tuning across model swaps —
     // they're normalized to the bounding box so they apply meaningfully to the
@@ -5049,6 +5199,14 @@ async function handleExport(format = 'stl') {
       bounds: currentBounds,
       regularizeOpts: _regularizeOpts(),
       mode: 'export',
+      stepUV: (stepFaceData && stepFaceData.uv)
+        ? {
+            faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV,
+            anchor: (stepUvAnchorFaceA != null && stepUvAnchorFaceB != null)
+              ? { faceA: stepUvAnchorFaceA, faceB: stepUvAnchorFaceB, allowedFaces: _currentTexturedStepFaceIds() }
+              : null,
+          }
+        : null,
     }, _onExportPipelineEvent, isStale);
     if (!result || isStale()) return;
 
@@ -5350,6 +5508,14 @@ async function bakeTextures() {
       bounds: currentBounds,
       regularizeOpts: _regularizeOpts(),
       mode: 'bake',
+      stepUV: (stepFaceData && stepFaceData.uv)
+        ? {
+            faceOfTri: stepFaceData.faceOfTri, uv: stepFaceData.uv, faceUV: stepFaceData.faceUV,
+            anchor: (stepUvAnchorFaceA != null && stepUvAnchorFaceB != null)
+              ? { faceA: stepUvAnchorFaceA, faceB: stepUvAnchorFaceB, allowedFaces: _currentTexturedStepFaceIds() }
+              : null,
+          }
+        : null,
     }, _onBakePipelineEvent, () => false);
     if (!result) throw new Error('bake pipeline aborted');
 
@@ -5443,6 +5609,7 @@ function adoptBakedGeometry(geometry, bounds, opts = {}) {
   setCompareViewEnabled(false);
   setSelectionBasis('mesh', { force: true });
   updateStepFaceUIVisibility();
+  updateStepUvModeAvailability();
 
   geometry = currentGeometry;
 
@@ -5574,6 +5741,7 @@ const PERSISTED_KEYS = [
   'offsetU', 'offsetV', 'rotation',
   'amplitude', 'textureHeight', 'invertDisplacement',
   'symmetricDisplacement', 'noDownwardZ', 'smoothBottom', 'harvestFlatFaces', 'harvestTol', 'preserveUntextured', 'textureSmoothing',
+  'stepUvSnapPeriodic',
   'mappingBlend', 'seamBandWidth', 'capAngle', 'boundaryFalloff', 'boundaryFalloffCurve',
   'bottomAngleLimit', 'topAngleLimit',
   'refineLength', 'maxTriangles',
@@ -5643,6 +5811,10 @@ function applySettingsSnapshot(snap) {
   if (snap.mappingMode != null) {
     mappingSelect.value = String(snap.mappingMode);
     mappingSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    // A snapshot saved against a different (STEP) model may restore mode 7
+    // onto a model with no STEP UV data — fall back rather than silently
+    // exporting with a disabled/unavailable projection selected.
+    updateStepUvModeAvailability();
   }
 
   // invertDisplacement BEFORE amplitude — the amplitude setter reads the flag.
@@ -5719,6 +5891,10 @@ function applySettingsSnapshot(snap) {
   if (snap.preserveUntextured != null) {
     preserveUntexturedChk.checked = snap.preserveUntextured;
     preserveUntexturedChk.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+  if (snap.stepUvSnapPeriodic != null) {
+    stepUvSnapChk.checked = snap.stepUvSnapPeriodic;
+    stepUvSnapChk.dispatchEvent(new Event('change', { bubbles: true }));
   }
 
   // Cylindrical-mode state. cylinderCenterX/Y/radius pass through unchanged
@@ -5807,6 +5983,7 @@ const DEFAULT_SETTINGS_SNAPSHOT = Object.freeze({
   offsetU: 0, offsetV: 0, rotation: 0,
   amplitude: 0.5, textureHeight: 0.5, invertDisplacement: false,
   symmetricDisplacement: false, noDownwardZ: false, smoothBottom: true, harvestFlatFaces: true, harvestTol: 0.005, preserveUntextured: true, textureSmoothing: 0,
+  stepUvSnapPeriodic: true,
   mappingBlend: 1, seamBandWidth: 0.5, capAngle: 20, boundaryFalloff: 0,
   boundaryFalloffCurve: 'ease',
   bottomAngleLimit: 5, topAngleLimit: 0,

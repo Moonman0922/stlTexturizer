@@ -50,6 +50,7 @@ self.onmessage = (e) => {
     if (result.normals)    transfer.push(result.normals.buffer);
     if (result.faceOfTri)  transfer.push(result.faceOfTri.buffer);
     if (result.solidOfTri) transfer.push(result.solidOfTri.buffer);
+    if (result.uv)         transfer.push(result.uv.buffer);
     self.postMessage({ type: 'done', result }, transfer);
   } catch (err) {
     self.postMessage({ type: 'error', message: (err && err.message) || String(err) });
@@ -68,6 +69,13 @@ function run(text, settings) {
   const r = importStep(text, {
     ...tol,
     vertexNormals: true,
+    // Per-corner analytic (u,v) in each face's own surface parametrization,
+    // plus per-face ranges/periods — lets the app tile a repeating pattern
+    // using the CAD face's true parametrization instead of a world-space
+    // approximation, and stitch its phase across face boundaries (see
+    // stepFaceUV.js). Cheap: it's a single extra post-pass over the already-
+    // welded mesh, reusing the same per-face surface lookups as vertexNormals.
+    parameterUVs: true,
     onProgress: (p) => {
       if (p.phase === 'tessellate' && p.total > 0) {
         const frac = 0.05 + 0.9 * (p.done / p.total);
@@ -95,6 +103,13 @@ function run(text, settings) {
     // faceOfTri. r.faces holds only plain data (numbers/strings/{x,y,z}
     // objects) so it survives the structured-clone postMessage boundary as-is.
     faces:      r.faces || null,
+    // Per-triangle-corner analytic UV (2 floats/corner, 6/triangle, aligned
+    // with positions/faceOfTri) and per-face UV ranges/periods. uv is a plain
+    // typed array (transferred above); faceUV is a Map<faceId, FaceUV> of
+    // plain data, structured-clone-safe like `faces`. Both null when the
+    // pinned meshStep version doesn't support parameterUVs.
+    uv:         soup.uv,
+    faceUV:     r.faceUV || null,
     units:      r.units,
     diagnostics: summarizeDiagnostics(r.diagnostics),
   };

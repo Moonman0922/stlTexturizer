@@ -133,9 +133,12 @@ export async function loadSTEPText(text, { settings = { preset: 'standard' }, on
   // soup — pass them through setupGeometry's clean-up pass as companion
   // arrays so a NaN/degenerate triangle getting dropped can't desync them
   // from the geometry. CAD-face selection depends on that alignment holding.
+  // uv is per-CORNER (stride 6: 2 floats × 3 corners) but lines up with the
+  // same triangle order, so it rides through the same clean-up pass.
   const companionArrays = [];
   if (result.faceOfTri)  companionArrays.push(result.faceOfTri);
   if (result.solidOfTri) companionArrays.push(result.solidOfTri);
+  if (result.uv)         companionArrays.push({ array: result.uv, stride: 6 });
   const { nanCount, degenerateCount, originOffset } = setupGeometry(geometry, companionArrays);
   const bounds = computeBounds(geometry);
 
@@ -144,6 +147,7 @@ export async function loadSTEPText(text, { settings = { preset: 'standard' }, on
   const triCount = geometry.attributes.position.count / 3;
   const faceOfTri  = result.faceOfTri  ? result.faceOfTri.slice(0, triCount)  : null;
   const solidOfTri = result.solidOfTri ? result.solidOfTri.slice(0, triCount) : null;
+  const uv         = result.uv         ? result.uv.slice(0, triCount * 6)    : null;
 
   return {
     geometry, bounds, nanCount, degenerateCount, originOffset,
@@ -157,6 +161,10 @@ export async function loadSTEPText(text, { settings = { preset: 'standard' }, on
       faceOfTri,
       solidOfTri,
       faces: result.faces || null,
+      // Per-face-UV pattern stitching data (see js/stepFaceUV.js). uv/faceUV
+      // are null together with faceOfTri's same caveat above.
+      uv,
+      faceUV: result.faceUV || null,
     },
   };
 }
